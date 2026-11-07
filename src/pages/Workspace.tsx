@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -123,22 +123,50 @@ export function Workspace() {
   };
 
   const stuck = project ? stageOrder.map((id) => ({ id, state: project.stages[id] })).find((row) => row.state?.relayKey) : undefined;
+  const [relayStep, setRelayStep] = useState(0);
+  const relayedKeys = useRef<Set<string>>(new Set());
+  const relayRunning = useRef(false);
+
+  // No click needed: as soon as a stage asks for a browser request, fetch it.
+  useEffect(() => {
+    const key = stuck?.state?.relayKey;
+    if (!key || relayRunning.current || relayedKeys.current.has(key)) return;
+    relayedKeys.current.add(key);
+    void relayThroughBrowser();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stuck?.state?.relayKey]);
 
   const relayThroughBrowser = async () => {
-    if (!project) return;
+    if (!project || relayRunning.current) return;
+    relayRunning.current = true;
     setBusy('relay');
     try {
       let current = project;
       let rounds = 0;
-      // One click should finish the stage even when it needs several requests
-      // (YouTube search → video details → Wikipedia → the model call).
+      // Keep going through every request this work needs — research alone is
+      // YouTube search → statistics → search → Wikipedia search → article → model.
       for (;;) {
         const next = stageOrder.map((id) => ({ id, state: current.stages[id] })).find((row) => row.state?.relayKey);
-        if (!next?.state?.relayKey || rounds >= 6) break;
-        rounds++;
-        const key = next.state.relayKey;
-        const spec = await get<{ relay: { providerLabel: string; kind: string; request: { url: string; method: string; headers: Record<string, string>; body: string } } }>(`/relay/${key}`);
-        const req = spec.relay.request;
+        if (!next?.state?.relayKey || rounds >= 14) break;
+        rounds += 1;
+        setRelayStep(rounds);
+
+        let spec: { providerLabel: string; kind: string; request: { url: string; method: string; headers: Record<string, string>; body: string } };
+        try {
+          spec = (
+            await get<{ relay: { providerLabel: string; kind: string; request: { url: string; method: string; headers: Record<string, string>; body: string } } }>(
+              `/relay/${next.state.relayKey}`,
+            )
+          ).relay;
+        } catch {
+          // The link expired (page reload / 30 min). Re-run that stage to mint a fresh request.
+          await post(`/projects/${current.id}/run`, { fromStage: next.id });
+          await new Promise((r) => setTimeout(r, 1200));
+          current = (await get<{ project: Project }>(`/projects/${current.id}`)).project;
+          continue;
+        }
+
+        const req = spec.request;
         let res: Response;
         try {
           res = await fetch(req.url, {
@@ -148,7 +176,7 @@ export function Workspace() {
           });
         } catch {
           throw new Error(
-            `Your browser could not send the request to ${spec.relay.providerLabel} — the provider blocked the cross-origin call (CORS). Gemini and the YouTube Data API allow this; some providers do not.`,
+            `Your browser could not send the request to ${spec.providerLabel} — the provider blocked the cross-origin call (CORS). Gemini and the YouTube/Wikipedia APIs allow this; some providers do not.`,
           );
         }
         const payload = await res.json().catch(() => ({}));
@@ -156,23 +184,25 @@ export function Workspace() {
           const detail = payload?.error?.message ?? payload?.error ?? `the provider answered ${res.status}`;
           throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 240));
         }
-        await post(`/relay/${key}`, { response: payload, projectId: current.id, stage: next.id });
+        await post(`/relay/${next.state.relayKey}`, { response: payload, projectId: current.id, stage: next.id });
 
-        // wait until the resumed stage either finishes or asks for the next request
-        for (let i = 0; i < 25; i++) {
-          await new Promise((r) => setTimeout(r, 600));
+        // Wait until the resumed stage either asks for the next request or stops running.
+        for (let i = 0; i < 45; i++) {
+          await new Promise((r) => setTimeout(r, 700));
           const fresh = await get<{ project: Project; job?: { status?: string } }>(`/projects/${current.id}`);
           current = fresh.project;
-          const again = stageOrder.some((id) => current.stages[id].relayKey);
-          if (again || fresh.job?.status !== 'running') break;
+          if (stageOrder.some((id) => current.stages[id].relayKey)) break;
+          if (fresh.job?.status !== 'running') break;
         }
       }
-      push(rounds > 1 ? `Fetched ${rounds} requests in your browser — stage resumed` : 'Fetched in your browser — stage resumed', 'success');
+      push(rounds > 1 ? `Fetched ${rounds} requests in your browser — pipeline continued` : 'Fetched in your browser — pipeline continued', 'success');
       refresh();
     } catch (err) {
       push(err instanceof Error ? err.message : 'Browser relay failed', 'error');
     } finally {
+      relayRunning.current = false;
       setBusy(null);
+      setRelayStep(0);
     }
   };
 
@@ -282,12 +312,12 @@ export function Workspace() {
                 {stageLabels[stuck.id]} needs a trip through your browser
               </div>
               <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
-                This server has no outbound internet, so it cannot call the model provider. Your browser can — it will send this one request with
-                your stored key and hand the answer back, then the stage resumes.
+                This server has no outbound internet, so it cannot fetch this itself. Your browser is doing it automatically — the request goes out
+                with your stored key, the answer comes back, and the stage resumes. Nothing else leaves this machine.
               </div>
             </div>
             <Button variant="primary" icon={<Wand2 size={14} />} onClick={relayThroughBrowser} loading={busy === 'relay'}>
-              Fetch with my browser
+              {busy === 'relay' ? `Fetching request ${relayStep}…` : 'Fetch with my browser'}
             </Button>
           </div>
         </Card>

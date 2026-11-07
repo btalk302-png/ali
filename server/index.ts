@@ -559,7 +559,25 @@ app.post('/api/relay/:key', (req, res) => {
     const project = body.projectId ? findProject(String(body.projectId)) : undefined;
     const stage = String(body.stage ?? '');
     if (project && stage && (STAGE_ORDER as string[]).includes(stage)) {
-      startPipelineJob(project.id, { fromStage: stage as StageId });
+      const resume = () => {
+        try {
+          startPipelineJob(project.id, { fromStage: stage as StageId });
+        } catch (err) {
+          // The previous job may still be unwinding; try once more, then let the UI retry.
+          if (/already running/i.test(err instanceof Error ? err.message : '')) {
+            setTimeout(() => {
+              try {
+                startPipelineJob(project.id, { fromStage: stage as StageId });
+              } catch {
+                /* the user can press the button again */
+              }
+            }, 1500);
+          } else {
+            throw err;
+          }
+        }
+      };
+      resume();
     }
     bus.emit('update', project ? { projectId: project.id } : {});
     res.json({ ok: true, characters: text.length, resumed: Boolean(project && stage) });
