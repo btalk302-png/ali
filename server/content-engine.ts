@@ -459,6 +459,7 @@ export function generateVisuals(brief: Brief, script: Script, seed = ''): Visual
       id: uid('sc'),
       beatId: b.id,
       title: b.title,
+      narration: b.narration,
       prompt: `${b.bRollPrompt}. Visual language: ${brief.style.toLowerCase()}, ${palette[1]} and ${palette[2]} accents, filmic contrast, no on-screen text.`,
       composition: pick(r, COMPOSITIONS),
       durationSec: b.durationSec ?? 20,

@@ -29,8 +29,9 @@ import { del, get, patch, post } from '../lib/api';
 import { clock, copyText, dateTimeLabel, download, percent, scoreTone, stageLabels, stageOrder, statusMeta, timeAgo } from '../lib/format';
 import type { Beat, Project, StageId } from '../../shared/types';
 import { Button, Card, CopyButton, Empty, Field, KeyValue, Pill, ProgressBar, ScoreRing, StatusPill, Tabs } from '../components/ui';
+import { ProductionTab } from './ProductionTab';
 
-type TabId = 'research' | 'strategy' | 'script' | 'storyboard' | 'thumbnails' | 'seo' | 'qa' | 'publish';
+type TabId = 'research' | 'strategy' | 'script' | 'storyboard' | 'thumbnails' | 'seo' | 'qa' | 'production' | 'publish';
 
 interface WorkspaceData {
   project: Project;
@@ -190,6 +191,11 @@ export function Workspace() {
           </div>
         </div>
         <div className="page-actions" style={{ marginLeft: 0 }}>
+          {project.production?.status === 'ready' && (
+            <Button icon={<Download size={14} />} onClick={() => window.open(`/api/projects/${project.id}/download`, '_blank')}>
+              Download MP4
+            </Button>
+          )}
           <Button icon={<Download size={14} />} onClick={exportPackage} loading={busy === 'export'}>Export package</Button>
           {!isLocked && (
             <Button icon={running ? <RefreshCw size={14} className="spin" /> : <Wand2 size={14} />} onClick={() => runPipeline()} loading={busy === 'run'} disabled={running}>
@@ -255,6 +261,7 @@ export function Workspace() {
               { id: 'thumbnails', label: 'Thumbnails', badge: project.visuals?.thumbnails.length ?? 0 },
               { id: 'seo', label: 'SEO', badge: project.seo?.score },
               { id: 'qa', label: 'Quality gate', badge: project.quality?.score },
+              { id: 'production', label: 'Production', badge: project.production?.status === 'ready' ? 'MP4' : undefined },
               { id: 'publish', label: 'Publish' },
             ]}
           />
@@ -299,6 +306,9 @@ export function Workspace() {
               onReject={() => setShowReject(true)}
               onRegenerate={() => regenerate('quality')}
             />
+          )}
+          {tab === 'production' && (
+            <ProductionTab project={project} onProjectReload={() => refresh()} />
           )}
           {tab === 'publish' && (
             <PublishTab

@@ -175,7 +175,7 @@ index.js (Express server + scheduler + orchestration + all API routes)
 | Thumbnails | ✅ AI/gradient placeholder | ✅ vector art director, 4 layouts, SVG export |
 | SEO | ✅ titles/tags/chapters | ✅ 6 scored variants + breakdown + CTR prediction |
 | Quality gates | ✅ extensive | ✅ 10 checks + 2 attestations + blockers |
-| Production | ✅ real MP4 (FFmpeg/Playwright) | ⚠️ shot list + timing (video render not in scope) |
+| Production | ✅ real MP4 (FFmpeg/Playwright) | ✅ real MP4 (bundled ffmpeg) + per-scene images + narration + timeline editor |
 | Publishing | ✅ YouTube API upload | ⚠️ dry-run queue (OAuth pending) |
 | Analytics | ✅ YouTube APIs | ✅ simulated series + retention curve |
 | Learning loop | ✅ | ✅ with approvals + A/B experiments |
@@ -197,23 +197,24 @@ Legend: ✅ shipped · ⚠️ intentionally scoped out (documented, not faked).
 - **Content engine:** deterministic but topic-aware research, strategy, script templates with word budgets, SEO scoring, quality checks.
 - **AI:** OpenAI-compatible + Gemini + Anthropic adapters; JSON mode; strict prompts; parse + validate; fallback.
 - **Art director:** SVG generator, per-variant layout solver (width budget + vertical fit + safe margins), palette contrast check.
+- **Media studio:** provider registry (Gemini image/TTS, OpenAI image/TTS, ElevenLabs, Pollinations, procedural art), per-scene asset store under `data/media/<project>/`, ffmpeg clip render (Ken Burns, 30 fps, H.264/AAC), concat + `.srt` + poster, streamed and downloadable MP4. Per-clip regenerate/reorder/delete endpoints back the timeline UI.
 - **Analytics engine:** per-video daily series, 100-point retention curve mapped to scene boundaries, recommendations, experiments.
 - **Frontend:** React 18 + React Router + custom CSS design system; hand-built charts (area, sparkline, bars, retention, rings); command palette; SSE + polling fallback; dark/light themes.
 
 ### Jo maine jaan bujh kar nahi banaya (aur kyun)
 
 1. **Real YouTube upload** — OAuth flow, quotas aur compliance ke baghair "fake publish" se behtar hai clearly dry-run bolna. UI aur API dono mein likha hai.
-2. **TTS / MP4 rendering** — bhaari dependencies (FFmpeg/Chromium) se zero-install promise tootta hai. Script timing-ready hai, audio next step hai.
-3. **Image generation** — vector art director faster, deterministic aur free hai; AI image prompts export ho jate hain.
+2. **Text-to-video providers (Veo/Runway)** — scene stills + ffmpeg motion real, deterministic aur free hain; paid video APIs ke liye same clip interface ready hai, lekin claim nahi karta ke wired hai.
+3. **Word-level burned-in subtitles** — `.srt` sidecar banti hai (publish ke liye kaafi), burn-in next step hai.
 
-Ye "shortcuts" nahi, **scope decisions** hain — aur document kiye gaye hain, chhupaye nahi.
+**Jo ab real ban gaya:** images (Gemini/OpenAI/Pollinations + procedural fallback), narration (Gemini/OpenAI/ElevenLabs TTS), MP4 assembly (bundled ffmpeg), clip-level editing aur download. Key na ho to video silent render hoti hai — aur UI/log usay silent hi kehte hain, audio ka dawa nahi karte.
 
 ---
 
 ## 11. Agla roadmap (agar isay production SaaS banana ho)
 
 1. **YouTube OAuth + upload** — Data API v3, resumable upload, thumbnail set, playlist, scheduled publish, quota-aware retry.
-2. **TTS + assembly** — per-scene audio, waveform, rebuild step, loudness normalisation; FFmpeg optional worker.
+2. **Video polish** — crossfade transitions, word-level subtitle burn-in, loudness normalisation, Veo/Runway clip providers.
 3. **Real research** — YouTube Data API search + comments mining, Google Trends, Reddit; sources ko evidence desk se link.
 4. **Persistence upgrade** — Postgres/SQLite adapter, migrations, multi-workspace.
 5. **Team review** — roles (editor/reviewer/publisher), comments on beats, audit trail.
@@ -226,4 +227,4 @@ Ye "shortcuts" nahi, **scope decisions** hain — aur document kiye gaye hain, c
 
 Reference repo ka **product brain** top-tier hai: approval-first automation, evidence, fail-closed media, resumable jobs. Uska **engineering + design shell** rebuild karne layak tha.
 
-CreatorPilot usi philosophy ko ek premium, zero-setup, inspectable studio mein convert karta hai — aur jo cheez abhi implement nahi hui (upload, TTS, MP4), usay saaf saaf *not implemented* bolta hai. Yehi asli premium hai: capability bhi, aur honesty bhi.
+CreatorPilot usi philosophy ko ek premium, zero-setup, inspectable studio mein convert karta hai — real images, real narration, real MP4, clip-level timeline editor — aur jo cheez abhi implement nahi hui (YouTube upload, text-to-video, burned-in subs), usay saaf saaf *not implemented* bolta hai. Yehi asli premium hai: capability bhi, aur honesty bhi.

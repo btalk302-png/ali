@@ -201,6 +201,7 @@ Return STRICT JSON: {"style":"one line","palette":["#hex","#hex","#hex"],"scenes
         id: uid('sc'),
         beatId: beat.id,
         title: beat.title,
+        narration: beat.narration,
         prompt: match?.prompt ?? beat.bRollPrompt,
         composition: match?.composition ?? simulated.scenes[i]?.composition ?? 'Center-framed subject',
         durationSec: beat.durationSec,

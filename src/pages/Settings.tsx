@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Database, KeyRound, Palette, RefreshCw, Save, Server, ShieldCheck, Trash2, Zap } from 'lucide-react';
+import { Check, Database, Film, Image as ImageIcon, KeyRound, Mic, Palette, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, X, Zap } from 'lucide-react';
 import { useApi, useToast } from '../lib/context';
 import { get, post, put } from '../lib/api';
 import { Button, Card, Field, Pill, Toggle } from '../components/ui';
@@ -12,12 +12,21 @@ const SECTIONS = [
   { id: 'channel', label: 'Channel' },
   { id: 'brand', label: 'Brand voice' },
   { id: 'providers', label: 'AI providers' },
+  { id: 'media', label: 'Voice & visuals' },
   { id: 'data', label: 'Data & privacy' },
 ] as const;
 
 export function SettingsPage() {
   const { push } = useToast();
   const { data, loading, reload } = useApi<{ settings: SettingsForm }>('/settings');
+  const { data: mediaConfig, reload: reloadMedia } = useApi<{
+    image: { resolved: string; gemini: boolean; openai: boolean; pollinations: boolean };
+    tts: { resolved: string | null; gemini: boolean; openai: boolean; elevenlabs: boolean };
+    voices: string[];
+    ffmpeg: { available: boolean; path: string };
+    links: Record<string, string>;
+  }>('/media/config');
+  const [mediaTests, setMediaTests] = useState<Record<string, { ok: boolean; message: string; latencyMs: number }>>({});
   const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>('channel');
   const [form, setForm] = useState<SettingsForm | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -37,10 +46,12 @@ export function SettingsPage() {
         automation: form.automation,
         demoMode: form.demoMode,
         providers: form.providers,
+        media: form.media,
         ...patchBody,
       });
       push('Settings saved', 'success');
       reload();
+      reloadMedia();
     } catch (err) {
       push(err instanceof Error ? err.message : 'Could not save settings', 'error');
     } finally {
@@ -57,6 +68,21 @@ export function SettingsPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Test failed';
       setTests((t) => ({ ...t, [id]: { ok: false, message, latencyMs: 0 } }));
+      push(message, 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const testMedia = async (kind: 'image' | 'tts', provider: string) => {
+    setBusy(`media-${kind}-${provider}`);
+    try {
+      const res = await post<{ ok: boolean; message: string; latencyMs: number }>('/media/test', { kind, provider });
+      setMediaTests((t) => ({ ...t, [`${kind}-${provider}`]: res }));
+      push(res.ok ? `${res.message} · ${res.latencyMs} ms` : res.message, res.ok ? 'success' : 'error');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Test failed';
+      setMediaTests((t) => ({ ...t, [`${kind}-${provider}`]: { ok: false, message, latencyMs: 0 } }));
       push(message, 'error');
     } finally {
       setBusy(null);
@@ -294,6 +320,182 @@ export function SettingsPage() {
                       {t}
                     </div>
                   ))}
+                </div>
+              </Card>
+            </>
+          )}
+
+
+          {section === 'media' && (
+            <>
+              <Card
+                title="Free providers for video & voice"
+                subtitle="Keys live only on this machine. Paste one free key and the Production tab starts generating real visuals and narration."
+                right={<Pill tone={mediaConfig?.ffmpeg.available ? 'green' : 'red'}>{mediaConfig?.ffmpeg.available ? 'ffmpeg ready' : 'ffmpeg missing'}</Pill>}
+              >
+                <div className="stack" style={{ gap: 14 }}>
+                  <div style={{ border: '1px solid rgba(124,107,255,0.24)', borderRadius: 13, padding: 14, background: 'rgba(124,107,255,0.05)' }}>
+                    <div className="row" style={{ gap: 9, marginBottom: 10 }}>
+                      <div style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(124,107,255,0.16)', border: '1px solid rgba(124,107,255,0.3)' }}>
+                        <Sparkles size={14} style={{ color: 'var(--violet-2)' }} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 650 }}>Google AI Studio · Gemini</div>
+                        <div className="faint" style={{ fontSize: 11 }}>Free tier covers image generation and text-to-speech. One key powers both.</div>
+                      </div>
+                      {mediaConfig?.image.gemini ? <Pill tone="green">connected</Pill> : <Pill tone="amber">key needed</Pill>}
+                    </div>
+                    <div className="grid g-2" style={{ gap: 12 }}>
+                      <Field label="Google API key" hint={<>Create one free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--violet-2)' }}>aistudio.google.com/apikey</a></>}>
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder={form.media.geminiApiKey?.includes('••') ? '•••••••• (saved — type to replace)' : 'AIza…'}
+                          value={form.media.geminiApiKey?.includes('••') ? '' : form.media.geminiApiKey}
+                          onChange={(e) => setForm({ ...form, media: { ...form.media, geminiApiKey: e.target.value } })}
+                        />
+                      </Field>
+                      <Field label="Voice" hint="Gemini prebuilt voices. Kore and Puck are the safest narration picks.">
+                        <select className="select" value={form.media.geminiVoice} onChange={(e) => setForm({ ...form, media: { ...form.media, geminiVoice: e.target.value } })}>
+                          {(mediaConfig?.voices ?? ['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede']).map((v) => (
+                            <option key={v} value={v}>{v}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Image model">
+                        <input className="input" value={form.media.geminiImageModel} onChange={(e) => setForm({ ...form, media: { ...form.media, geminiImageModel: e.target.value } })} />
+                      </Field>
+                      <Field label="Speech model">
+                        <input className="input" value={form.media.geminiTtsModel} onChange={(e) => setForm({ ...form, media: { ...form.media, geminiTtsModel: e.target.value } })} />
+                      </Field>
+                    </div>
+                    <div className="row" style={{ gap: 8, marginTop: 12 }}>
+                      <Button size="sm" variant="ghost" icon={<ImageIcon size={13} />} onClick={() => testMedia('image', 'gemini')} loading={busy === 'media-image-gemini'} disabled={!form.media.geminiApiKey && !mediaConfig?.image.gemini}>
+                        Test image
+                      </Button>
+                      <Button size="sm" variant="ghost" icon={<Mic size={13} />} onClick={() => testMedia('tts', 'gemini')} loading={busy === 'media-tts-gemini'} disabled={!form.media.geminiApiKey && !mediaConfig?.tts.gemini}>
+                        Test voice
+                      </Button>
+                      <span className="faint" style={{ fontSize: 10.5 }}>Save changes first — tests use the stored key.</span>
+                    </div>
+                    {(mediaTests['image-gemini'] || mediaTests['tts-gemini']) && (
+                      <div className="stack" style={{ gap: 4, marginTop: 8 }}>
+                        {['image-gemini', 'tts-gemini'].map((key) =>
+                          mediaTests[key] ? (
+                            <div key={key} className="row" style={{ gap: 6, fontSize: 11.5, color: mediaTests[key].ok ? 'var(--green)' : 'var(--red)' }}>
+                              {mediaTests[key].ok ? <Check size={12} /> : <X size={12} />} {key.startsWith('image') ? 'Image' : 'Voice'}: {mediaTests[key].message}
+                            </div>
+                          ) : null,
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 13, padding: 14 }}>
+                    <div className="row" style={{ gap: 9, marginBottom: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>Pollinations · free image fallback</div>
+                        <div className="faint" style={{ fontSize: 10.5 }}>No key required. Used automatically when no Google/OpenAI key is set; unreachable networks fall back to studio art instead of failing the render.</div>
+                      </div>
+                      <Pill tone="green">free</Pill>
+                    </div>
+                  </div>
+
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 13, padding: 14 }}>
+                    <div className="row" style={{ gap: 9, marginBottom: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>OpenAI · optional</div>
+                        <div className="faint" style={{ fontSize: 10.5 }}>gpt-image-1 and gpt-4o-mini-tts. Only used if you paste a key.</div>
+                      </div>
+                      {mediaConfig?.image.openai ? <Pill tone="green">connected</Pill> : null}
+                    </div>
+                    <div className="grid g-2" style={{ gap: 12 }}>
+                      <Field label="OpenAI key">
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder={form.media.openaiApiKey?.includes('••') ? '•••••••• (saved)' : 'sk-…'}
+                          value={form.media.openaiApiKey?.includes('••') ? '' : form.media.openaiApiKey}
+                          onChange={(e) => setForm({ ...form, media: { ...form.media, openaiApiKey: e.target.value } })}
+                        />
+                      </Field>
+                      <Field label="Image model">
+                        <input className="input" value={form.media.openaiImageModel} onChange={(e) => setForm({ ...form, media: { ...form.media, openaiImageModel: e.target.value } })} />
+                      </Field>
+                      <Field label="Speech model">
+                        <input className="input" value={form.media.openaiTtsModel} onChange={(e) => setForm({ ...form, media: { ...form.media, openaiTtsModel: e.target.value } })} />
+                      </Field>
+                      <Field label="Voice">
+                        <input className="input" value={form.media.openaiVoice} onChange={(e) => setForm({ ...form, media: { ...form.media, openaiVoice: e.target.value } })} />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 13, padding: 14 }}>
+                    <div className="row" style={{ gap: 9, marginBottom: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>ElevenLabs · optional premium voice</div>
+                        <div className="faint" style={{ fontSize: 10.5 }}>Free tier has a monthly character quota — good for short-form tests.</div>
+                      </div>
+                      {mediaConfig?.tts.elevenlabs ? <Pill tone="green">connected</Pill> : null}
+                    </div>
+                    <div className="grid g-2" style={{ gap: 12 }}>
+                      <Field label="ElevenLabs key">
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder={form.media.elevenLabsApiKey?.includes('••') ? '•••••••• (saved)' : 'xi-…'}
+                          value={form.media.elevenLabsApiKey?.includes('••') ? '' : form.media.elevenLabsApiKey}
+                          onChange={(e) => setForm({ ...form, media: { ...form.media, elevenLabsApiKey: e.target.value } })}
+                        />
+                      </Field>
+                      <Field label="Voice ID" hint="Copy a voice ID from your ElevenLabs voice library.">
+                        <input className="input" value={form.media.elevenLabsVoiceId} onChange={(e) => setForm({ ...form, media: { ...form.media, elevenLabsVoiceId: e.target.value } })} />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="grid g-2" style={{ gap: 14 }}>
+                    <Field label="Default visual source">
+                      <select className="select" value={form.media.imageProvider} onChange={(e) => setForm({ ...form, media: { ...form.media, imageProvider: e.target.value as Settings['media']['imageProvider'] } })}>
+                        <option value="auto">Auto — best available</option>
+                        <option value="gemini">Google AI Studio</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="pollinations">Pollinations (free)</option>
+                        <option value="local">Studio art (offline)</option>
+                      </select>
+                    </Field>
+                    <Field label="Default narration">
+                      <select className="select" value={form.media.ttsProvider} onChange={(e) => setForm({ ...form, media: { ...form.media, ttsProvider: e.target.value as Settings['media']['ttsProvider'] } })}>
+                        <option value="auto">Auto — best available</option>
+                        <option value="gemini">Google Gemini TTS</option>
+                        <option value="openai">OpenAI TTS</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="none">None — silent cuts</option>
+                      </select>
+                    </Field>
+                    <Field label="Default aspect">
+                      <select className="select" value={form.media.defaultAspect} onChange={(e) => setForm({ ...form, media: { ...form.media, defaultAspect: e.target.value as '16:9' | '9:16' } })}>
+                        <option value="16:9">16:9 · long-form</option>
+                        <option value="9:16">9:16 · Shorts</option>
+                      </select>
+                    </Field>
+                    <Field label="Motion">
+                      <select className="select" value={form.media.motion ? 'on' : 'off'} onChange={(e) => setForm({ ...form, media: { ...form.media, motion: e.target.value === 'on' } })}>
+                        <option value="on">Slow Ken Burns zoom</option>
+                        <option value="off">Static frames</option>
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+              </Card>
+
+              <Card title="What the renderer does" subtitle="Honest view of the pipeline — no hidden claims">
+                <div className="stack" style={{ gap: 8, fontSize: 12, color: 'var(--text-2)' }}>
+                  <div className="row" style={{ gap: 7 }}><Film size={13} style={{ color: 'var(--violet-2)' }} />Scenes become stills (AI image or studio art), each with its own editable prompt.</div>
+                  <div className="row" style={{ gap: 7 }}><Mic size={13} style={{ color: 'var(--violet-2)' }} />Narration is synthesized per scene, timed to the beat, then mixed under the visuals.</div>
+                  <div className="row" style={{ gap: 7 }}><KeyRound size={13} style={{ color: 'var(--violet-2)' }} />Keys never leave this machine: they are stored in data/store.json and sent only to the provider you pick.</div>
+                  <div className="row" style={{ gap: 7 }}><ShieldCheck size={13} style={{ color: 'var(--green)' }} />Export is a real H.264/AAC MP4 with an .srt sidecar, downloadable from the Production tab.</div>
                 </div>
               </Card>
             </>

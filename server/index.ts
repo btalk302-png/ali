@@ -9,6 +9,22 @@ import { thumbnailSvg } from './thumbnails.js';
 import { testProvider } from './ai.js';
 import { addDays, clamp, round, slug, timecode } from './util.js';
 import { evaluateQuality } from './content-engine.js';
+import {
+  absoluteMedia,
+  createMediaJob,
+  finishJob,
+  generateAllImages,
+  generateAllSpeech,
+  generateSceneImage,
+  generateSceneSpeech,
+  mediaPayload,
+  mediaBus,
+  projectDir,
+  renderProject,
+  sceneNarration,
+} from './media/service.js';
+import { mediaReadiness, testMediaProvider } from './media/providers.js';
+import { ffmpegAvailable, FFMPEG } from './media/ffmpeg.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -21,8 +37,23 @@ app.use(express.json({ limit: '4mb' }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function publicSettings(s: Settings) {
+  const maskKey = (key: string) => (key ? `${MASK}${key.slice(-4)}` : '');
   return {
     ...s,
+    media: {
+      ...s.media,
+      geminiApiKey: maskKey(s.media.geminiApiKey),
+      openaiApiKey: maskKey(s.media.openaiApiKey),
+      elevenLabsApiKey: maskKey(s.media.elevenLabsApiKey),
+    },
+    mediaStatus: {
+      gemini: Boolean(s.media.geminiApiKey),
+      openai: Boolean(s.media.openaiApiKey),
+      elevenlabs: Boolean(s.media.elevenLabsApiKey),
+      ffmpeg: ffmpegAvailable(),
+      imageProvider: mediaReadiness(s).image.resolved,
+      ttsProvider: mediaReadiness(s).tts.resolved,
+    },
     providers: s.providers.map((p) => ({
       ...p,
       apiKey: p.apiKey ? `${MASK}${p.apiKey.slice(-4)}` : '',
@@ -170,6 +201,9 @@ app.get('/api/projects', (req, res) => {
       updatedAt: p.updatedAt,
       createdAt: p.createdAt,
       engine: p.engine,
+      production: p.production?.status === 'ready' && p.production.videoFile
+        ? { status: p.production.status, durationSec: p.production.durationSec ?? 0 }
+        : null,
     })),
     counts: {
       all: db.projects.length,
@@ -250,6 +284,12 @@ app.delete('/api/projects/:id', (req, res) => {
   const before = db.projects.length;
   db.projects = db.projects.filter((p) => p.id !== req.params.id);
   db.comments = db.comments.filter((c) => c.projectId !== req.params.id);
+  db.jobs = db.jobs.filter((j) => j.projectId !== req.params.id);
+  try {
+    fs.rmSync(path.join(process.cwd(), 'data', 'media', req.params.id), { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
   save();
   res.json({ deleted: before !== db.projects.length });
 });
@@ -415,6 +455,10 @@ app.get('/api/jobs/:id', (req, res) => {
   const job = getDb().jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   res.json({ job });
+});
+
+mediaBus.on('update', (payload: any) => {
+  bus.emit('job', payload);
 });
 
 app.get('/api/events', (req, res) => {
@@ -598,6 +642,258 @@ app.post('/api/experiments/:id/decide', (req, res) => {
   res.json({ experiment: exp });
 });
 
+
+// ---------------------------------------------------------------- media studio (images, voice, video)
+function mediaProject(req: express.Request, res: express.Response): Project | undefined {
+  const project = findProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return undefined;
+  }
+  return project;
+}
+
+function startMediaJob(project: Project, label: string, fn: (job: ReturnType<typeof createMediaJob>) => Promise<unknown>) {
+  const running = getDb().jobs.find((j) => j.projectId === project.id && j.kind === 'media' && j.status === 'running');
+  if (running) throw new Error('A media job is already running for this project.');
+  const job = createMediaJob(project.id, label);
+  void (async () => {
+    try {
+      await fn(job);
+      finishJob(job, 'done');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Media job failed';
+      finishJob(job, 'failed', message);
+      if (project.production) {
+        project.production.status = 'failed';
+        project.production.error = message;
+        save();
+      }
+      console.error('[media]', message);
+    }
+    bus.emit('update', { projectId: project.id });
+  })();
+  return job;
+}
+
+app.get('/api/media/config', (_req, res) => {
+  const settings = getDb().settings;
+  const readiness = mediaReadiness(settings);
+  res.json({
+    ...readiness,
+    ffmpeg: { available: ffmpegAvailable(), path: FFMPEG },
+    providers: {
+      images: ['gemini', 'openai', 'pollinations', 'local'],
+      tts: ['gemini', 'openai', 'elevenlabs', 'none'],
+    },
+    links: {
+      gemini: 'https://aistudio.google.com/apikey',
+      openai: 'https://platform.openai.com/api-keys',
+      elevenlabs: 'https://elevenlabs.io/app/settings/api-keys',
+      pollinations: 'https://pollinations.ai',
+    },
+  });
+});
+
+app.get('/api/projects/:id/media', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  res.json(mediaPayload(project));
+});
+
+app.put('/api/projects/:id/media/settings', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const body = req.body ?? {};
+  const next = { ...(project.media ?? {}) };
+  if (['auto', 'local', 'gemini', 'openai', 'pollinations'].includes(body.imageProvider)) next.imageProvider = body.imageProvider;
+  if (['auto', 'gemini', 'elevenlabs', 'openai', 'none'].includes(body.ttsProvider)) next.ttsProvider = body.ttsProvider;
+  if (typeof body.voice === 'string') next.voice = body.voice;
+  if (body.aspect === '16:9' || body.aspect === '9:16') next.aspect = body.aspect;
+  if (typeof body.motion === 'boolean') next.motion = body.motion;
+  project.media = next;
+  project.updatedAt = new Date().toISOString();
+  save();
+  bus.emit('update', { projectId: project.id });
+  res.json({ project, media: mediaPayload(project) });
+});
+
+app.post('/api/projects/:id/media/images', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const onlyMissing = req.body?.onlyMissing !== false;
+  try {
+    const job = startMediaJob(project, 'Generating visuals', (j) => generateAllImages(project, j, onlyMissing));
+    res.status(202).json({ job });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : 'Could not start job' });
+  }
+});
+
+app.post('/api/projects/:id/media/voice', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  try {
+    const job = startMediaJob(project, 'Generating narration', (j) => generateAllSpeech(project, j));
+    res.status(202).json({ job });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : 'Could not start job' });
+  }
+});
+
+app.post('/api/projects/:id/media/render', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  if (!ffmpegAvailable()) return res.status(503).json({ error: 'ffmpeg is not installed on this server.' });
+  try {
+    const job = startMediaJob(project, 'Rendering video', (j) => renderProject(project, j));
+    res.status(202).json({ job });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : 'Could not start render' });
+  }
+});
+
+app.post('/api/media/test', async (req, res) => {
+  const { kind, provider } = req.body ?? {};
+  if (kind !== 'image' && kind !== 'tts') return res.status(400).json({ error: 'kind must be image or tts' });
+  const result = await testMediaProvider(getDb().settings, kind, String(provider ?? ''));
+  res.status(result.ok ? 200 : 502).json(result);
+});
+
+app.post('/api/projects/:id/scenes/:sceneId/regenerate', async (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const scenes = project.visuals?.scenes ?? [];
+  const index = scenes.findIndex((s) => s.id === req.params.sceneId);
+  if (index < 0) return res.status(404).json({ error: 'Scene not found' });
+  const scene = scenes[index];
+  const body = req.body ?? {};
+  if (typeof body.prompt === 'string' && body.prompt.trim()) scene.prompt = body.prompt.trim();
+  if (typeof body.narration === 'string') scene.narration = body.narration.trim();
+  const wantImage = body.image !== false;
+  const wantVoice = body.voice === true;
+  try {
+    const image = wantImage ? await generateSceneImage(project, scene, index, { force: true }) : undefined;
+    const voice = wantVoice ? await generateSceneSpeech(project, scene, index, {}) : undefined;
+    project.updatedAt = new Date().toISOString();
+    save();
+    bus.emit('update', { projectId: project.id });
+    res.json({ scene: mediaPayload(project).scenes[index], image, voice });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Regeneration failed' });
+  }
+});
+
+app.patch('/api/projects/:id/scenes/:sceneId', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const scenes = project.visuals?.scenes ?? [];
+  const scene = scenes.find((s) => s.id === req.params.sceneId);
+  if (!scene) return res.status(404).json({ error: 'Scene not found' });
+  const body = req.body ?? {};
+  if (typeof body.prompt === 'string' && body.prompt.trim()) scene.prompt = body.prompt.trim();
+  if (typeof body.narration === 'string') scene.narration = body.narration.trim();
+  if (typeof body.title === 'string' && body.title.trim()) scene.title = body.title.trim();
+  if (typeof body.durationSec === 'number') scene.durationSec = clamp(round(body.durationSec, 1), 1, 90);
+  project.updatedAt = new Date().toISOString();
+  save();
+  bus.emit('update', { projectId: project.id });
+  res.json({ scenes: mediaPayload(project).scenes });
+});
+
+app.post('/api/projects/:id/scenes/:sceneId/move', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const scenes = project.visuals?.scenes ?? [];
+  const index = scenes.findIndex((s) => s.id === req.params.sceneId);
+  if (index < 0) return res.status(404).json({ error: 'Scene not found' });
+  const dir = req.body?.direction === 'up' ? -1 : 1;
+  const target = index + dir;
+  if (target < 0 || target >= scenes.length) return res.status(400).json({ error: 'Cannot move further' });
+  const [moved] = scenes.splice(index, 1);
+  scenes.splice(target, 0, moved);
+  project.visuals!.scenes = scenes;
+  project.updatedAt = new Date().toISOString();
+  save();
+  bus.emit('update', { projectId: project.id });
+  res.json({ scenes: mediaPayload(project).scenes });
+});
+
+app.delete('/api/projects/:id/scenes/:sceneId', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project) return;
+  const scenes = project.visuals?.scenes ?? [];
+  if (scenes.length <= 1) return res.status(400).json({ error: 'Keep at least one scene in the cut.' });
+  const scene = scenes.find((s) => s.id === req.params.sceneId);
+  if (!scene) return res.status(404).json({ error: 'Scene not found' });
+  project.visuals!.scenes = scenes.filter((s) => s.id !== scene.id);
+  project.updatedAt = new Date().toISOString();
+  save();
+  bus.emit('update', { projectId: project.id });
+  res.json({ scenes: mediaPayload(project).scenes });
+});
+
+app.post('/api/projects/:id/scenes', (req, res) => {
+  const project = mediaProject(req, res);
+  if (!project || !project.visuals) return res.status(400).json({ error: 'Project has no storyboard yet' });
+  const scenes = project.visuals.scenes;
+  const body = req.body ?? {};
+  const afterId = typeof body.afterId === 'string' ? body.afterId : undefined;
+  const at = afterId ? scenes.findIndex((s) => s.id === afterId) + 1 : scenes.length;
+  const scene = {
+    id: `scene-${Math.random().toString(36).slice(2, 8)}`,
+    beatId: scenes[Math.max(0, at - 1)]?.beatId ?? '',
+    title: String(body.title ?? 'New scene'),
+    prompt: String(body.prompt ?? project.visuals.style),
+    composition: String(body.composition ?? 'cinematic medium shot, clean negative space'),
+    durationSec: clamp(Number(body.durationSec ?? 6), 1, 90),
+    transition: 'cut',
+    narration: String(body.narration ?? ''),
+  };
+  scenes.splice(at, 0, scene);
+  project.updatedAt = new Date().toISOString();
+  save();
+  bus.emit('update', { projectId: project.id });
+  res.status(201).json({ scene, scenes: mediaPayload(project).scenes });
+});
+
+function sendMediaFile(req: express.Request, res: express.Response, file: string, downloadAs?: string) {
+  const project = findProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const dir = projectDir(project.id);
+  const abs = path.join(dir, path.basename(file));
+  if (!abs.startsWith(dir) || !fs.existsSync(abs)) return res.status(404).json({ error: 'File not ready yet' });
+  if (downloadAs) return res.download(abs, downloadAs);
+  res.sendFile(abs, { headers: { 'cache-control': 'public, max-age=60' } });
+}
+
+app.get('/api/projects/:id/media/:file', (req, res) => {
+  sendMediaFile(req, res, req.params.file);
+});
+
+app.get('/api/projects/:id/video', (req, res) => {
+  const project = findProject(req.params.id);
+  if (!project?.production?.videoFile) return res.status(404).json({ error: 'No render yet' });
+  sendMediaFile(req, res, project.production.videoFile);
+});
+
+app.get('/api/projects/:id/download', (req, res) => {
+  const project = findProject(req.params.id);
+  if (!project?.production?.videoFile) return res.status(404).json({ error: 'Render the video first' });
+  const name = `${slug(project.title || 'creatorpilot-video') || 'creatorpilot-video'}.mp4`;
+  logActivity('download', `Downloaded “${project.title}” MP4`, { projectId: project.id });
+  sendMediaFile(req, res, project.production.videoFile, name);
+});
+
+app.get('/api/projects/:id/captions', (req, res) => {
+  const project = findProject(req.params.id);
+  if (!project?.production?.captionsFile) return res.status(404).json({ error: 'No captions yet' });
+  const abs = absoluteMedia(project.production.captionsFile);
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'No captions yet' });
+  res.type('text/plain').setHeader('content-disposition', `attachment; filename="${project.id}.srt"`);
+  res.send(fs.readFileSync(abs, 'utf8'));
+});
+
 // ---------------------------------------------------------------- settings & providers
 app.get('/api/settings', (_req, res) => res.json({ settings: publicSettings(getDb().settings) }));
 
@@ -607,6 +903,18 @@ app.put('/api/settings', (req, res) => {
   if (incoming.channel) db.settings.channel = { ...db.settings.channel, ...incoming.channel };
   if (incoming.brand) db.settings.brand = { ...db.settings.brand, ...incoming.brand };
   if (incoming.automation) db.settings.automation = { ...db.settings.automation, ...incoming.automation };
+  if (incoming.media) {
+    const next: any = { ...db.settings.media };
+    for (const [key, value] of Object.entries(incoming.media)) {
+      if (typeof value === 'string' && value.includes(MASK)) continue;
+      if (typeof value === 'string' && value.trim() === '' && ['geminiApiKey', 'openaiApiKey', 'elevenLabsApiKey'].includes(key)) {
+        next[key] = '';
+        continue;
+      }
+      if (value !== undefined) next[key] = value;
+    }
+    db.settings.media = next;
+  }
   if (typeof incoming.demoMode === 'boolean') db.settings.demoMode = incoming.demoMode;
   if (Array.isArray(incoming.providers)) {
     db.settings.providers = incoming.providers.map((p: any) => {
@@ -630,8 +938,14 @@ app.post('/api/providers/:id/test', async (req, res) => {
 
 app.post('/api/demo/reset', (_req, res) => {
   resetStore();
+  try {
+    fs.rmSync(path.join(process.cwd(), 'data', 'media'), { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
   bus.emit('update', {});
   res.json({ ok: true });
+  setTimeout(() => void prepareDemoCut(), 400);
 });
 
 // ---------------------------------------------------------------- autopilot
@@ -711,4 +1025,32 @@ setInterval(() => {
 
 app.listen(PORT, HOST, () => {
   console.log(`\n  CreatorPilot Studio ready → http://localhost:${PORT}\n  host ${HOST} · ${getDb().settings.demoMode ? 'demo engine' : 'live provider'} · ${getDb().projects.length} projects loaded\n`);
+  setTimeout(() => void prepareDemoCut(), 1200);
 });
+
+/**
+ * First boot has no rendered media. Build one real MP4 from studio art so the
+ * Production tab opens with a working player + download instead of an empty state.
+ */
+async function prepareDemoCut() {
+  if (!ffmpegAvailable()) {
+    console.log('[media] ffmpeg unavailable — MP4 export disabled');
+    return;
+  }
+  const mediaRoot = path.join(process.cwd(), 'data', 'media');
+  if (fs.existsSync(mediaRoot) && fs.readdirSync(mediaRoot).length > 0) return;
+  const candidate = getDb().projects.find((p) => (p.visuals?.scenes?.length ?? 0) > 0);
+  if (!candidate) return;
+  console.log(`[media] building a demo cut for ${candidate.id} (${candidate.title})`);
+  const job = createMediaJob(candidate.id, 'Preparing demo cut');
+  try {
+    await renderProject(candidate, job);
+    finishJob(job, 'done');
+    console.log('[media] demo cut ready');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Demo render failed';
+    console.error('[media] demo render failed:', message);
+    finishJob(job, 'failed', message);
+  }
+  bus.emit('update', { projectId: candidate.id });
+}

@@ -21,6 +21,7 @@ interface ProjectRow {
   metrics: { views: number; ctr: number; avd: string; subs: number } | null;
   updatedAt: string;
   engine: string;
+  production?: { status: string; durationSec: number } | null;
 }
 
 interface ProjectsResponse {
@@ -200,6 +201,19 @@ export function Pipeline() {
                           <strong style={{ fontSize: 12.5 }}>{p.title}</strong>
                           <div className="faint" style={{ fontSize: 10.5, marginTop: 2 }}>
                             {p.format === 'short' ? 'Short' : `${p.durationMin} min`} · {p.engine} engine
+                            {p.production && (
+                              <>
+                                {' · '}
+                                <a
+                                  href={`/api/projects/${p.id}/download`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ color: 'var(--green)', fontWeight: 650 }}
+                                  title="Download the rendered MP4"
+                                >
+                                  MP4 ready
+                                </a>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>

@@ -34,6 +34,7 @@ export function initStore(): Db {
       db.settings.channel = { ...DEFAULT_SETTINGS.channel, ...db.settings.channel };
       db.settings.brand = { ...DEFAULT_SETTINGS.brand, ...db.settings.brand };
       db.settings.automation = { ...DEFAULT_SETTINGS.automation, ...db.settings.automation };
+      db.settings.media = { ...DEFAULT_SETTINGS.media, ...(db.settings.media ?? {}) };
       if (!Array.isArray(db.settings.providers) || db.settings.providers.length === 0) {
         db.settings.providers = DEFAULT_SETTINGS.providers;
       }

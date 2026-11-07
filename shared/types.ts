@@ -81,6 +81,25 @@ export interface Script {
   generatedBy: string;
 }
 
+export interface SceneImage {
+  status: 'pending' | 'ready' | 'error';
+  file?: string;
+  provider?: string;
+  prompt?: string;
+  updatedAt?: string;
+  error?: string;
+}
+
+export interface SceneAudio {
+  status: 'pending' | 'ready' | 'error';
+  file?: string;
+  provider?: string;
+  voice?: string;
+  durationSec?: number;
+  updatedAt?: string;
+  error?: string;
+}
+
 export interface Scene {
   id: string;
   beatId: string;
@@ -89,6 +108,10 @@ export interface Scene {
   composition: string;
   durationSec: number;
   transition: string;
+  narration?: string;
+  locked?: boolean;
+  image?: SceneImage;
+  audio?: SceneAudio;
 }
 
 export interface ThumbnailConcept {
@@ -173,6 +196,28 @@ export interface Schedule {
   youtubeId?: string;
 }
 
+export interface Production {
+  status: 'idle' | 'running' | 'ready' | 'failed';
+  videoFile?: string;
+  captionsFile?: string;
+  thumbnailFile?: string;
+  durationSec?: number;
+  sizeBytes?: number;
+  renderedAt?: string;
+  aspect?: '16:9' | '9:16';
+  withNarration?: boolean;
+  providerSummary?: string;
+  error?: string;
+}
+
+export interface ProjectMediaSettings {
+  imageProvider?: 'auto' | 'local' | 'gemini' | 'openai' | 'pollinations';
+  ttsProvider?: 'auto' | 'gemini' | 'elevenlabs' | 'openai' | 'none';
+  voice?: string;
+  aspect?: '16:9' | '9:16';
+  motion?: boolean;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -200,6 +245,8 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   engine: 'demo' | 'live';
+  media?: ProjectMediaSettings;
+  production?: Production;
 }
 
 export interface JobLog {
@@ -211,7 +258,7 @@ export interface JobLog {
 export interface Job {
   id: string;
   projectId?: string;
-  kind: 'pipeline' | 'autopilot' | 'analytics' | 'engagement';
+  kind: 'pipeline' | 'autopilot' | 'analytics' | 'engagement' | 'media';
   status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
   progress: number;
   currentStage?: string;
@@ -283,6 +330,23 @@ export interface ProviderConfig {
   kind: 'text' | 'image';
 }
 
+export interface MediaSettings {
+  imageProvider: 'auto' | 'local' | 'gemini' | 'openai' | 'pollinations';
+  ttsProvider: 'auto' | 'gemini' | 'elevenlabs' | 'openai' | 'none';
+  geminiApiKey: string;
+  geminiImageModel: string;
+  geminiTtsModel: string;
+  geminiVoice: string;
+  openaiApiKey: string;
+  openaiImageModel: string;
+  openaiTtsModel: string;
+  openaiVoice: string;
+  elevenLabsApiKey: string;
+  elevenLabsVoiceId: string;
+  defaultAspect: '16:9' | '9:16';
+  motion: boolean;
+}
+
 export interface Settings {
   channel: {
     name: string;
@@ -310,6 +374,7 @@ export interface Settings {
     guardrails: string;
   };
   providers: ProviderConfig[];
+  media: MediaSettings;
   demoMode: boolean;
 }
 
