@@ -83,12 +83,24 @@ export function mediaReadiness(settings: Settings) {
 const timeout = (ms: number) => AbortSignal.timeout(ms);
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>, ms = 120_000) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-    signal: timeout(ms),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: timeout(ms),
+    });
+  } catch (err) {
+    let host = url;
+    try {
+      host = new URL(url).host;
+    } catch {
+      /* keep raw */
+    }
+    const code = (err as { cause?: { code?: string } })?.cause?.code ?? (err instanceof Error ? err.message : 'network error');
+    throw new Error(`Could not reach ${host} from this server — ${code}. The renderer falls back to studio art when this happens.`);
+  }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 400);
     throw new Error(`${res.status} ${text}`);

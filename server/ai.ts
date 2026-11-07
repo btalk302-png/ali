@@ -29,6 +29,24 @@ export function isLive(settings: Settings): boolean {
   return Boolean(activeProvider(settings));
 }
 
+/** fetch() with an actionable message when the host has no outbound network. */
+async function post(url: string, init: RequestInit, label: string): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    let host = url;
+    try {
+      host = new URL(url).host;
+    } catch {
+      /* keep the raw url */
+    }
+    const code = (err as { cause?: { code?: string } })?.cause?.code ?? (err instanceof Error ? err.message : 'network error');
+    throw new Error(
+      `Could not reach ${label} (${host}) from this server — ${code}. Check the server's outbound internet access (a sandbox or corporate proxy will block this), then run the test again.`,
+    );
+  }
+}
+
 interface CompleteOpts {
   system: string;
   prompt: string;
@@ -53,7 +71,7 @@ export async function aiComplete(settings: Settings, opts: CompleteOpts): Promis
 }
 
 async function openaiCompatible(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
-  const res = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+  const res = await post(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     signal,
     headers: {
@@ -71,7 +89,7 @@ async function openaiCompatible(provider: ProviderConfig, opts: CompleteOpts, si
         { role: 'user', content: opts.prompt },
       ],
     }),
-  });
+  }, provider.label);
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 300);
     // Some OpenAI-compatible servers reject response_format; retry once without it.
@@ -105,7 +123,7 @@ async function geminiCall(
   thinkingBudget?: number,
 ): Promise<string> {
   const url = `${provider.baseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(provider.model)}:generateContent?key=${encodeURIComponent(provider.apiKey)}`;
-  const res = await fetch(url, {
+  const res = await post(url, {
     method: 'POST',
     signal,
     headers: { 'content-type': 'application/json' },
@@ -120,7 +138,7 @@ async function geminiCall(
         ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
       },
     }),
-  });
+  }, 'Google Gemini');
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as {
     candidates?: {
@@ -152,7 +170,7 @@ async function geminiCall(
 }
 
 async function anthropic(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
-  const res = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/messages`, {
+  const res = await post(`${provider.baseUrl.replace(/\/$/, '')}/messages`, {
     method: 'POST',
     signal,
     headers: {
@@ -166,7 +184,7 @@ async function anthropic(provider: ProviderConfig, opts: CompleteOpts, signal: A
       system: opts.system,
       messages: [{ role: 'user', content: opts.prompt }],
     }),
-  });
+  }, provider.label);
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as { content?: { text?: string }[] };
   const text = data.content?.map((c) => c.text ?? '').join('');
