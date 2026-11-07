@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { Job, Project, Research, Settings, StageId, StageState } from '../shared/types.js';
-import { aiComplete, isLive, requireProvider } from './ai.js';
+import { aiComplete, isLive, RelayNeeded, requireProvider } from './ai.js';
 import { evaluateQuality } from './quality.js';
 import { runResearch } from './research.js';
 import { scriptStage, seoStage, strategyStage, visualsStage } from './stages.js';
@@ -85,6 +85,7 @@ async function executeStage(project: Project, stage: StageId, settings: Settings
   state.status = 'running';
   state.startedAt = nowIso();
   state.message = 'Working…';
+  delete state.relayKey;
   project.status = 'generating';
   project.updatedAt = nowIso();
   save();
@@ -146,11 +147,17 @@ async function executeStage(project: Project, stage: StageId, settings: Settings
     state.status = 'done';
     state.endedAt = nowIso();
     state.message = message;
+    delete state.relayKey;
     return message;
   } catch (err) {
     state.status = 'failed';
     state.endedAt = nowIso();
-    state.message = err instanceof Error ? err.message : 'Stage failed';
+    if (err instanceof RelayNeeded) {
+      state.relayKey = err.key;
+      state.message = `This server cannot reach ${err.providerLabel} (${err.reason.replace(/^Could not reach [^(]+?\s*/, '')}). Your browser can — use “Fetch with my browser”.`;
+    } else {
+      state.message = err instanceof Error ? err.message : 'Stage failed';
+    }
     throw err;
   } finally {
     save();

@@ -1,5 +1,5 @@
 import type { Research, ResearchSource, ResearchVideo, Settings, TitleCandidate } from '../shared/types.js';
-import { aiJson } from './ai.js';
+import { aiJson, RelayNeeded } from './ai.js';
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -409,7 +409,9 @@ export async function runResearch(
       synthesis = await synthesise(settings, keyword, videos, patternStats, wiki.extract, grounding.notes);
       if (synthesis) providerNotes.push(synthesis.provider);
     } catch (err) {
-      // Analysis is optional: the raw data below is still real and usable.
+      // The browser relay is a hard stop: the stage must surface the relay request.
+      if (err instanceof RelayNeeded) throw err;
+      // Otherwise analysis is optional: the raw data below is still real and usable.
       providerNotes.push(`analysis failed (${err instanceof Error ? err.message.slice(0, 80) : 'error'})`);
     }
   }

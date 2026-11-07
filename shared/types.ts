@@ -8,6 +8,8 @@ export interface StageState {
   startedAt?: string;
   endedAt?: string;
   message?: string;
+  /** Set when the server has no route to the model provider and the browser must relay the call. */
+  relayKey?: string;
 }
 
 /* ------------------------------------------------------------------ research */

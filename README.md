@@ -45,6 +45,16 @@ No key? The app says so plainly and every button explains what is missing. It ne
 
 `ffmpeg` and `sharp` ship as npm dependencies, so MP4 export works without a system install.
 
+## When the server has no internet (preview sandboxes)
+
+Hosted preview sandboxes usually block outbound traffic, so the server cannot call Gemini/OpenAI even with a valid key. Instead of failing, the app hands the exact request to your browser:
+
+1. The stage stops with **“This server has no route to Google Gemini”** and a `relayKey` is attached to that stage.
+2. Click **Fetch with my browser** — the browser sends that one request using your stored key, then posts the provider's JSON back.
+3. The completion is cached under the same prompt hash, so the stage resumes and finishes without another network call.
+
+Gemini's native endpoint allows this (CORS permits `content-type` + `x-goog-api-key`). Some providers, notably OpenAI, reject browser calls — switch the active provider if the relay reports a CORS block. For real work, running the app locally is still the better path.
+
 ## Verify your keys
 
 ```bash

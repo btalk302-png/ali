@@ -245,7 +245,10 @@ const workspaceFixture = {
     style: 'Cinematic',
     language: 'English',
     status: 'review',
-    stages: Object.fromEntries(['research', 'strategy', 'script', 'visuals', 'seo', 'quality', 'export'].map((s) => [s, { id: s, status: 'done' }])),
+    stages: {
+      ...Object.fromEntries(['research', 'strategy', 'script', 'visuals', 'quality', 'export'].map((s) => [s, { id: s, status: 'done' }])),
+      seo: { id: 'seo', status: 'failed', relayKey: 'relay123', message: 'This server cannot reach Google Gemini.' },
+    },
     research: researchFixture,
     strategy: {
       bigIdea: 'Retention is a sequencing problem.',
@@ -333,6 +336,7 @@ checks.push(
   ['workspace: research tab', workspaceText.includes('Opportunity read')],
   ['workspace: stage tabs', Boolean(scriptTab)],
   ['workspace: script tab content', scriptText.includes('The cliff') && scriptText.includes('Copy script')],
+  ['workspace: browser relay banner', workspaceText.includes('needs a trip through your browser') && workspaceText.includes('Fetch with my browser')],
 );
 
 for (const [name, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`);

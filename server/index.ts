@@ -18,7 +18,8 @@ import {
 import { runResearch } from './research.js';
 import { evaluateQuality } from './quality.js';
 import { thumbnailSvg } from './thumbnails.js';
-import { testProvider } from './ai.js';
+import { submitRelay, testProvider } from './ai.js';
+import { getSpec } from './relay.js';
 import { clamp, round, slug } from './util.js';
 import {
   absoluteMedia,
@@ -530,6 +531,37 @@ app.get('/api/projects/:id/captions', (req, res) => {
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'No captions yet' });
   res.type('text/plain').setHeader('content-disposition', `attachment; filename="${project.id}.srt"`);
   res.send(fs.readFileSync(abs, 'utf8'));
+});
+
+// ---------------------------------------------------------------- browser relay
+
+/**
+ * The preview/sandbox server has no outbound internet, but the user's browser
+ * does. A stage that fails with `relayKey` can borrow the browser: the UI sends
+ * the exact HTTP request, then posts the provider's JSON body here.
+ */
+app.get('/api/relay/:key', (req, res) => {
+  const spec = getSpec(req.params.key);
+  if (!spec) return res.status(404).json({ error: 'This relay expired. Run the stage again to get a fresh request.' });
+  res.json({ relay: spec });
+});
+
+app.post('/api/relay/:key', (req, res) => {
+  const spec = getSpec(req.params.key);
+  if (!spec) return res.status(404).json({ error: 'This relay expired. Run the stage again to get a fresh request.' });
+  const body = req.body ?? {};
+  try {
+    const text = submitRelay(spec.providerId, spec.key, body.response ?? body);
+    const project = body.projectId ? findProject(String(body.projectId)) : undefined;
+    const stage = String(body.stage ?? '');
+    if (project && stage && (STAGE_ORDER as string[]).includes(stage)) {
+      startPipelineJob(project.id, { fromStage: stage as StageId });
+    }
+    bus.emit('update', project ? { projectId: project.id } : {});
+    res.json({ ok: true, characters: text.length, resumed: Boolean(project && stage) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'The browser response could not be read' });
+  }
 });
 
 // ---------------------------------------------------------------- settings & providers

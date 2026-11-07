@@ -1,4 +1,5 @@
 import type { ProviderConfig, Settings } from '../shared/types.js';
+import { cachedCompletion, registerSpec, rememberCompletion, relayKey, type RelayRequest } from './relay.js';
 
 const ENV_KEYS: Record<string, string | undefined> = {
   gemini: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
@@ -29,21 +30,29 @@ export function isLive(settings: Settings): boolean {
   return Boolean(activeProvider(settings));
 }
 
-/** fetch() with an actionable message when the host has no outbound network. */
-async function post(url: string, init: RequestInit, label: string): Promise<Response> {
-  try {
-    return await fetch(url, init);
-  } catch (err) {
-    let host = url;
-    try {
-      host = new URL(url).host;
-    } catch {
-      /* keep the raw url */
-    }
-    const code = (err as { cause?: { code?: string } })?.cause?.code ?? (err instanceof Error ? err.message : 'network error');
-    throw new Error(
-      `Could not reach ${label} (${host}) from this server — ${code}. Check the server's outbound internet access (a sandbox or corporate proxy will block this), then run the test again.`,
-    );
+/** Socket-level failure: no route from this machine to the provider. */
+export class ProviderUnreachable extends Error {
+  constructor(
+    readonly label: string,
+    readonly host: string,
+    readonly code: string,
+  ) {
+    super(`Could not reach ${label} (${host}) from this server — ${code}.`);
+  }
+}
+
+/**
+ * The server cannot reach the provider, but the browser can. The stage stops
+ * here with this error; the UI fetches `request` and posts the response back.
+ */
+export class RelayNeeded extends Error {
+  constructor(
+    readonly key: string,
+    readonly providerLabel: string,
+    readonly request: RelayRequest,
+    readonly reason: string,
+  ) {
+    super(`This server has no route to ${providerLabel}. Use “Fetch with my browser” to finish the stage.`);
   }
 }
 
@@ -55,25 +64,44 @@ interface CompleteOpts {
   signal?: AbortSignal;
 }
 
-/** Calls the configured text provider. Throws on any transport or shape error. */
-export async function aiComplete(settings: Settings, opts: CompleteOpts): Promise<string> {
-  const provider = activeProvider(settings);
-  if (!provider) throw new Error('No live provider configured');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
-  try {
-    if (provider.id === 'gemini') return await gemini(provider, opts, controller.signal);
-    if (provider.id === 'anthropic') return await anthropic(provider, opts, controller.signal);
-    return await openaiCompatible(provider, opts, controller.signal);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+const isFlash = (model: string) => /flash/i.test(model);
+const trimBase = (url: string) => url.replace(/\/$/, '');
 
-async function openaiCompatible(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
-  const res = await post(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+/** The exact HTTP request for a provider. Used both server-side and by the browser relay. */
+function buildRequest(provider: ProviderConfig, opts: CompleteOpts, relay: boolean): RelayRequest {
+  const maxTokens = Math.max(opts.maxTokens ?? 4096, 2048);
+  if (provider.id === 'gemini') {
+    // Native endpoint + header auth: CORS-safe from a browser (no API key in the URL).
+    const thinkingBudget = isFlash(provider.model) ? 0 : relay ? 128 : undefined;
+    return {
+      url: `${trimBase(provider.baseUrl)}/models/${encodeURIComponent(provider.model)}:generateContent`,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': provider.apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: opts.system }] },
+        contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: maxTokens,
+          ...(opts.json ? { responseMimeType: 'application/json' } : {}),
+          ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
+        },
+      }),
+    };
+  }
+
+  if (provider.id === 'anthropic') {
+    return {
+      url: `${trimBase(provider.baseUrl)}/messages`,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: provider.model, max_tokens: maxTokens, system: opts.system, messages: [{ role: 'user', content: opts.prompt }] }),
+    };
+  }
+
+  return {
+    url: `${trimBase(provider.baseUrl)}/chat/completions`,
     method: 'POST',
-    signal,
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${provider.apiKey}`,
@@ -82,117 +110,131 @@ async function openaiCompatible(provider: ProviderConfig, opts: CompleteOpts, si
     body: JSON.stringify({
       model: provider.model,
       temperature: 0.7,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_tokens: maxTokens,
       ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
       messages: [
         { role: 'system', content: opts.system },
         { role: 'user', content: opts.prompt },
       ],
     }),
-  }, provider.label);
-  if (!res.ok) {
-    const detail = (await res.text()).slice(0, 300);
-    // Some OpenAI-compatible servers reject response_format; retry once without it.
-    if (opts.json && res.status === 400 && /response_format|json_object/i.test(detail)) {
-      return openaiCompatible(provider, { ...opts, json: false }, signal);
-    }
-    throw new Error(`${provider.label} ${res.status}: ${detail}`);
+  };
+}
+
+/** Pulls the assistant text out of a provider response body. */
+export function extractCompletion(providerId: string, data: unknown): string {
+  const body = data as Record<string, any>;
+  if (body?.error) {
+    const message = typeof body.error === 'string' ? body.error : body.error?.message ?? JSON.stringify(body.error);
+    throw new Error(`Provider error: ${String(message).slice(0, 300)}`);
   }
-  const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
-  const choice = data.choices?.[0];
+
+  if (providerId === 'gemini') {
+    if (body?.promptFeedback?.blockReason) {
+      throw new Error(`Gemini blocked this request (${body.promptFeedback.blockReason}). Try a different topic or reword the title.`);
+    }
+    const candidate = body?.candidates?.[0];
+    const text = candidate?.content?.parts?.filter((p: any) => !p.thought).map((p: any) => p.text ?? '').join('') ?? '';
+    if (!text) {
+      throw new Error(
+        candidate?.finishReason === 'MAX_TOKENS'
+          ? 'Gemini ran out of output tokens before writing an answer. Try again, or pick a model with a larger output limit.'
+          : candidate?.finishReason
+            ? `Gemini stopped before writing an answer (${candidate.finishReason}).`
+            : 'Gemini returned an empty completion. Try again.',
+      );
+    }
+    return text;
+  }
+
+  if (providerId === 'anthropic') {
+    const text = (body?.content ?? []).map((c: any) => c?.text ?? '').join('');
+    if (!text) throw new Error('Anthropic returned an empty completion. Try again.');
+    return text;
+  }
+
+  const choice = body?.choices?.[0];
   const text = choice?.message?.content;
   if (choice?.finish_reason === 'length') {
-    throw new Error(`${provider.label} ran out of output tokens (max_tokens). Run the stage again or raise the model's output limit.`);
+    throw new Error('The model ran out of output tokens (max_tokens). Run the stage again, or raise the output limit.');
   }
-  if (!text) throw new Error(`${provider.label} returned an empty completion`);
+  if (!text) throw new Error('The model returned an empty completion. Try again.');
   return text;
 }
 
-const isFlash = (model: string) => /flash/i.test(model);
-
-async function gemini(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
-  // Flash models spend the output budget on "thinking" and return cut-off JSON;
-  // Pro models cannot switch thinking off, so they keep their (larger) default.
-  return geminiCall(provider, opts, signal, isFlash(provider.model) ? 0 : undefined);
-}
-
-async function geminiCall(
-  provider: ProviderConfig,
-  opts: CompleteOpts,
-  signal: AbortSignal,
-  thinkingBudget?: number,
-): Promise<string> {
-  const url = `${provider.baseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(provider.model)}:generateContent?key=${encodeURIComponent(provider.apiKey)}`;
-  const res = await post(url, {
-    method: 'POST',
-    signal,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: opts.system }] },
-      contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: Math.max(opts.maxTokens ?? 4096, 2048),
-        ...(opts.json ? { responseMimeType: 'application/json' } : {}),
-        // 2.5 Flash spends output budget on "thinking" and then returns cut-off JSON.
-        ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
-      },
-    }),
-  }, 'Google Gemini');
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = (await res.json()) as {
-    candidates?: {
-      content?: { parts?: { text?: string; thought?: boolean }[] };
-      finishReason?: string;
-    }[];
-    promptFeedback?: { blockReason?: string };
-  };
-  if (data.promptFeedback?.blockReason) {
-    throw new Error(`Gemini blocked this request (${data.promptFeedback.blockReason}). Try a different topic or reword the title.`);
-  }
-  const candidate = data.candidates?.[0];
-  const text = candidate?.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? '').join('');
-  if (!text) {
-    if (candidate?.finishReason === 'MAX_TOKENS' && thinkingBudget === undefined) {
-      // Retry with the smallest thinking budget the model allows.
-      return geminiCall(provider, opts, signal, isFlash(provider.model) ? 0 : 128);
+/** Direct server-side call. Throws ProviderUnreachable when there is no route. */
+async function send(provider: ProviderConfig, opts: CompleteOpts): Promise<string> {
+  const request = buildRequest(provider, opts, false);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    let res: Response;
+    try {
+      res = await fetch(request.url, { method: request.method, headers: request.headers, body: request.body, signal: opts.signal ?? controller.signal });
+    } catch (err) {
+      let host = request.url;
+      try {
+        host = new URL(request.url).host;
+      } catch {
+        /* keep raw */
+      }
+      const code = (err as { cause?: { code?: string } })?.cause?.code ?? (err instanceof Error ? err.message : 'network error');
+      throw new ProviderUnreachable(provider.label, host, code);
     }
-    throw new Error(
-      candidate?.finishReason
-        ? `Gemini stopped before writing an answer (${candidate.finishReason}). Try again, or pick a bigger model.`
-        : 'Gemini returned an empty completion. Try again.',
-    );
+
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 300);
+      // Some OpenAI-compatible servers reject response_format; retry once without it.
+      if (opts.json && res.status === 400 && /response_format|json_object/i.test(detail)) {
+        return send(provider, { ...opts, json: false });
+      }
+      throw new Error(`${provider.label} ${res.status}: ${detail}`);
+    }
+    const data = await res.json();
+    try {
+      return extractCompletion(provider.id, data);
+    } catch (err) {
+      // Gemini Pro: thinking consumed the whole budget. Retry once with the minimum.
+      if (provider.id === 'gemini' && !isFlash(provider.model) && err instanceof Error && /MAX_TOKENS|empty completion/.test(err.message)) {
+        const retry = buildRequest(provider, opts, true);
+        const retryRes = await fetch(retry.url, { method: 'POST', headers: retry.headers, body: retry.body, signal: controller.signal });
+        if (!retryRes.ok) throw new Error(`Gemini ${retryRes.status}: ${(await retryRes.text()).slice(0, 300)}`);
+        return extractCompletion(provider.id, await retryRes.json());
+      }
+      throw err;
+    }
+  } finally {
+    clearTimeout(timeout);
   }
-  if (candidate?.finishReason === 'MAX_TOKENS') {
-    throw new Error('Gemini ran out of output tokens and the answer was cut off. Run the stage again, or switch to a model with a larger output limit.');
+}
+
+/** Calls the configured text provider, using a browser-relayed completion when one was supplied. */
+export async function aiComplete(settings: Settings, opts: CompleteOpts): Promise<string> {
+  const provider = activeProvider(settings);
+  if (!provider) throw new Error('No live provider configured');
+
+  const key = relayKey([provider.id, provider.model, provider.baseUrl, opts.system, opts.prompt, Boolean(opts.json), opts.maxTokens ?? 4096]);
+  const cached = cachedCompletion(key);
+  if (cached) return cached;
+
+  try {
+    return await send(provider, opts);
+  } catch (err) {
+    if (err instanceof ProviderUnreachable) {
+      const request = buildRequest(provider, opts, true);
+      registerSpec({ key, providerId: provider.id, providerLabel: provider.label, request, reason: err.message, createdAt: new Date().toISOString() });
+      throw new RelayNeeded(key, provider.label, request, err.message);
+    }
+    throw err;
   }
+}
+
+/** Stores the browser's provider response under the request hash the stage will reuse. */
+export function submitRelay(providerId: string, key: string, response: unknown): string {
+  const text = extractCompletion(providerId, response);
+  rememberCompletion(key, text);
   return text;
 }
 
-async function anthropic(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
-  const res = await post(`${provider.baseUrl.replace(/\/$/, '')}/messages`, {
-    method: 'POST',
-    signal,
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': provider.apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: provider.model,
-      max_tokens: opts.maxTokens ?? 4096,
-      system: opts.system,
-      messages: [{ role: 'user', content: opts.prompt }],
-    }),
-  }, provider.label);
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = (await res.json()) as { content?: { text?: string }[] };
-  const text = data.content?.map((c) => c.text ?? '').join('');
-  if (!text) throw new Error('Anthropic returned an empty completion');
-  return text;
-}
-
-/** Best-effort JSON extraction from a model response. */
 export function parseJson<T = Record<string, unknown>>(text: string): T {
   const cleaned = text
     .replace(/^\uFEFF/, '')
@@ -232,6 +274,7 @@ export async function aiJson<T>(settings: Settings, opts: CompleteOpts): Promise
       return parseJson<T>(text);
     } catch (err) {
       lastError = err;
+      if (err instanceof RelayNeeded) throw err;
       // Transport/auth/quota errors will not fix themselves on a retry.
       if (err instanceof Error && !/JSON|parse|cut off|tokens/i.test(err.message)) throw err;
     }
@@ -241,9 +284,7 @@ export async function aiJson<T>(settings: Settings, opts: CompleteOpts): Promise
 
 export async function testProvider(provider: ProviderConfig): Promise<{ ok: boolean; message: string; latencyMs: number }> {
   const started = Date.now();
-  const settings = {
-    providers: [{ ...provider, enabled: true }],
-  } as unknown as Settings;
+  const settings = { providers: [{ ...provider, enabled: true }] } as unknown as Settings;
   try {
     const text = await aiComplete(settings, {
       system: 'You are a connectivity probe. Reply with exactly: ok',
@@ -252,6 +293,7 @@ export async function testProvider(provider: ProviderConfig): Promise<{ ok: bool
     });
     return { ok: true, message: `Reached ${provider.label} (${provider.model}) — "${text.trim().slice(0, 40)}"`, latencyMs: Date.now() - started };
   } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : 'Unknown provider error', latencyMs: Date.now() - started };
+    const message = err instanceof RelayNeeded ? err.reason : err instanceof Error ? err.message : 'Unknown provider error';
+    return { ok: false, message, latencyMs: Date.now() - started };
   }
 }

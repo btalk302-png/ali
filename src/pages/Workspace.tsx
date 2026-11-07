@@ -122,6 +122,37 @@ export function Workspace() {
     }
   };
 
+  const stuck = project ? stageOrder.map((id) => ({ id, state: project.stages[id] })).find((row) => row.state?.relayKey) : undefined;
+
+  const relayThroughBrowser = async () => {
+    if (!project || !stuck?.state?.relayKey) return;
+    const key = stuck.state.relayKey;
+    setBusy('relay');
+    try {
+      const spec = await get<{ relay: { providerLabel: string; request: { url: string; method: string; headers: Record<string, string>; body: string } } }>(`/relay/${key}`);
+      let res: Response;
+      try {
+        res = await fetch(spec.relay.request.url, { method: spec.relay.request.method, headers: spec.relay.request.headers, body: spec.relay.request.body });
+      } catch {
+        throw new Error(
+          `Your browser could not send the request to ${spec.relay.providerLabel} — the provider blocked the cross-origin call (CORS). Gemini allows this; some providers do not. Switch the active provider in Settings.`,
+        );
+      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = payload?.error?.message ?? payload?.error ?? `the provider answered ${res.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 240));
+      }
+      await post(`/relay/${key}`, { response: payload, projectId: project.id, stage: stuck.id });
+      push('Fetched by your browser — stage resumed', 'success');
+      refresh();
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Browser relay failed', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const exportPackage = () =>
     act('export', async () => {
       const res = await get<{ filename: string; markdown: string }>(`/projects/${project?.id}/export`);
@@ -219,6 +250,25 @@ export function Workspace() {
           </Button>
         </div>
       </div>
+
+      {stuck && (
+        <Card className="flat">
+          <div className="row wrap" style={{ gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 650 }}>
+                {stageLabels[stuck.id]} needs a trip through your browser
+              </div>
+              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
+                This server has no outbound internet, so it cannot call the model provider. Your browser can — it will send this one request with
+                your stored key and hand the answer back, then the stage resumes.
+              </div>
+            </div>
+            <Button variant="primary" icon={<Wand2 size={14} />} onClick={relayThroughBrowser} loading={busy === 'relay'}>
+              Fetch with my browser
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {blocked && (
         <Card className="flat">
