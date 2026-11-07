@@ -154,7 +154,8 @@ async function executeStage(project: Project, stage: StageId, settings: Settings
     state.endedAt = nowIso();
     if (err instanceof RelayNeeded) {
       state.relayKey = err.key;
-      state.message = `This server cannot reach ${err.providerLabel} (${err.reason.replace(/^Could not reach [^(]+?\s*/, '')}). Your browser can — use “Fetch with my browser”.`;
+      // err.reason already names the label, host and socket error — pass it through untouched.
+      state.message = `${err.reason}. Your browser can reach it — the app is fetching this request now.`;
     } else {
       state.message = err instanceof Error ? err.message : 'Stage failed';
     }

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Clapperboard, Menu, Moon, Plus, Search, Settings as SettingsIcon, Sparkles, Sun, Zap } from 'lucide-react';
 import { useApi, useLive } from '../lib/context';
+import { fireWindowEvent, requestSettingsSection } from '../lib/events';
 import { Pill } from './ui';
 import { NewProjectModal } from './NewProjectModal';
 
@@ -29,6 +30,25 @@ const TITLES: Record<string, string> = {
 export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
+
+  /** Already on Settings? Jump to the AI provider card instead of doing nothing. */
+  const openSettings = () => {
+    if (location.pathname === '/settings') {
+      requestSettingsSection('providers');
+      document.getElementById('section-providers')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    navigate('/settings');
+  };
+
+  /** Already researching? Put the caret in the keyword box instead of doing nothing. */
+  const openResearch = () => {
+    if (location.pathname === '/research') {
+      fireWindowEvent('cp-focus-research');
+      return;
+    }
+    navigate('/research');
+  };
   const { connected } = useLive();
   const { data } = useApi<Bootstrap>('/bootstrap');
   const [newOpen, setNewOpen] = useState(false);
@@ -125,7 +145,12 @@ export function Layout({ children }: { children: ReactNode }) {
               <StatusRow label="Voice" ok={Boolean(status?.ttsProvider)} value={status?.ttsProvider ?? 'silent'} />
               <StatusRow label="Video export" ok={Boolean(status?.ffmpeg)} value={status?.ffmpeg ? 'ffmpeg ready' : 'missing'} />
             </div>
-            <button className="nav-item" onClick={() => navigate('/settings')} style={{ fontSize: 11.5, marginTop: 8, paddingLeft: 0 }}>
+            <button
+              className="nav-item"
+              onClick={() => openSettings()}
+              title={location.pathname === '/settings' ? 'Jump to AI providers' : 'Open Settings'}
+              style={{ fontSize: 11.5, marginTop: 8, paddingLeft: 0 }}
+            >
               <SettingsIcon size={13} /> Manage keys
             </button>
           </div>
@@ -154,14 +179,16 @@ export function Layout({ children }: { children: ReactNode }) {
             {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
 
-          <button className="icon-btn" onClick={() => navigate('/research')} aria-label="Research a title" title="Research a title">
+          <button className="icon-btn" onClick={() => openResearch()} aria-label="Research a title" title="Research a title">
             <Search size={15} />
           </button>
 
-          <button
+          <div
             className="icon-btn"
+            role="status"
+            aria-live="polite"
             title={connected ? 'Live updates connected' : 'Reconnecting…'}
-            aria-label="Connection status"
+            aria-label={connected ? 'Live updates connected' : 'Reconnecting'}
             style={{ cursor: 'default' }}
           >
             <span
@@ -173,7 +200,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 display: 'inline-block',
               }}
             />
-          </button>
+          </div>
 
           <button className="btn btn-primary" onClick={() => setNewOpen(true)}>
             <Plus size={15} />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -26,6 +26,20 @@ interface Bootstrap {
 const STYLES = ['Cinematic', 'Editorial', 'Neon', 'Minimal'];
 
 export function TitleResearch() {
+  const keywordRef = useRef<HTMLInputElement>(null);
+  const [keywordFlash, setKeywordFlash] = useState(false);
+
+  useEffect(() => {
+    const grab = () => {
+      keywordRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      keywordRef.current?.focus();
+      setKeywordFlash(true);
+      window.setTimeout(() => setKeywordFlash(false), 1200);
+    };
+    window.addEventListener('cp-focus-research', grab);
+    return () => window.removeEventListener('cp-focus-research', grab);
+  }, []);
+
   const { push } = useToast();
   const navigate = useNavigate();
   const { data: boot } = useApi<Bootstrap>('/bootstrap');
@@ -116,8 +130,15 @@ export function TitleResearch() {
       <Card className="flat" title="Research a keyword" subtitle="The same keyword can seed a new video, or just answer what is working in your niche.">
         <div className="row wrap" style={{ gap: 10 }}>
           <input
+            id="research-keyword"
+            ref={keywordRef}
+            aria-label="Research keyword"
             className="input"
-            style={{ flex: 1, minWidth: 260, height: 42 }}
+            style={
+              keywordFlash
+                ? { flex: 1, minWidth: 260, height: 42, outline: '2px solid rgba(124,107,255,0.65)', outlineOffset: 2 }
+                : { flex: 1, minWidth: 260, height: 42 }
+            }
             placeholder="e.g. how to price a freelance video edit"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}

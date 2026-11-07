@@ -5,7 +5,8 @@ import { DEFAULT_SETTINGS } from './defaults.js';
 
 export { DEFAULT_SETTINGS };
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+// CP_DATA_DIR lets tests (and multi-instance setups) point at a scratch store.
+const DATA_DIR = process.env.CP_DATA_DIR ? path.resolve(process.env.CP_DATA_DIR) : path.join(process.cwd(), 'data');
 const FILE = path.join(DATA_DIR, 'store.json');
 
 let db: Db;

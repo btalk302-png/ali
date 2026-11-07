@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { post } from '../lib/api';
 import { useApi, useLive, useToast } from '../lib/context';
+import { requestNewProject } from '../lib/events';
 import type { ProjectStatus, StageId } from '../../shared/types';
 import { Button, Card, Empty, Pill, ProgressBar, StatusPill } from '../components/ui';
 import { clock, dateTimeLabel, downloadFile, stageLabels, stageOrder, timeAgo } from '../lib/format';
@@ -102,7 +103,7 @@ export function Pipeline() {
             <Search size={14} />
             Research a title
           </Link>
-          <Button variant="primary" icon={<Plus size={15} />} onClick={() => window.dispatchEvent(new Event('cp-new-project'))}>
+          <Button variant="primary" icon={<Plus size={15} />} onClick={() => requestNewProject()}>
             New video
           </Button>
         </div>
@@ -116,6 +117,7 @@ export function Pipeline() {
               key={f.key}
               className={`btn ${status === f.key ? 'btn-primary' : 'btn-ghost'}`}
               style={{ height: 30, fontSize: 12 }}
+              aria-pressed={status === f.key}
               onClick={() => setStatus(f.key)}
             >
               {f.label}
@@ -138,7 +140,7 @@ export function Pipeline() {
                 <Link to="/research" className="btn btn-ghost">
                   <Search size={14} /> Research titles first
                 </Link>
-                <Button variant="primary" icon={<Plus size={14} />} onClick={() => window.dispatchEvent(new Event('cp-new-project'))}>
+                <Button variant="primary" icon={<Plus size={14} />} onClick={() => requestNewProject()}>
                   New video
                 </Button>
               </div>

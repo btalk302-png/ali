@@ -51,14 +51,40 @@ interface CompleteOpts {
 }
 
 const isFlash = (model: string) => /flash/i.test(model);
+const isGemini3 = (model: string) => /gemini-3/i.test(model);
+
+/**
+ * Gemini 3.x replaces thinkingBudget with thinkingLevel; 2.5 flash spends its
+ * whole output budget "thinking" unless the budget is pinned to zero.
+ */
+function thinkingConfig(model: string, relay: boolean): Record<string, unknown> | undefined {
+  if (isGemini3(model)) return { thinkingLevel: 'low' };
+  if (isFlash(model)) return { thinkingBudget: 0 };
+  return relay ? { thinkingBudget: 128 } : undefined;
+}
 const trimBase = (url: string) => url.replace(/\/$/, '');
+
+/** Providers answer 404 / "not found" when a model id is retired or mistyped. */
+const RETIRED_MODEL = /not found|not supported|no longer available|does not exist|is not available|was retired|deprecated/i;
+const CURRENT_MODEL: Record<string, string> = {
+  gemini: 'gemini-3.8-flash',
+  anthropic: 'claude-sonnet-4-5',
+  deepseek: 'deepseek-chat',
+  openrouter: 'openai/gpt-4o-mini',
+  openai: 'gpt-4o-mini',
+};
+
+function retiredModelMessage(provider: ProviderConfig): string {
+  const current = CURRENT_MODEL[provider.id] ?? 'a current model id';
+  return `“${provider.model}” is not available on ${provider.label} any more. Open Settings → AI providers, set the model to a current id (e.g. ${current}), save, then run the stage again.`;
+}
 
 /** The exact HTTP request for a provider. Used both server-side and by the browser relay. */
 function buildRequest(provider: ProviderConfig, opts: CompleteOpts, relay: boolean): RelayRequest {
   const maxTokens = Math.max(opts.maxTokens ?? 4096, 2048);
   if (provider.id === 'gemini') {
     // Native endpoint + header auth: CORS-safe from a browser (no API key in the URL).
-    const thinkingBudget = isFlash(provider.model) ? 0 : relay ? 128 : undefined;
+    const thinking = thinkingConfig(provider.model, relay);
     return {
       url: `${trimBase(provider.baseUrl)}/models/${encodeURIComponent(provider.model)}:generateContent`,
       method: 'POST',
@@ -70,7 +96,7 @@ function buildRequest(provider: ProviderConfig, opts: CompleteOpts, relay: boole
           temperature: 0.7,
           maxOutputTokens: maxTokens,
           ...(opts.json ? { responseMimeType: 'application/json' } : {}),
-          ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
+          ...(thinking ? { thinkingConfig: thinking } : {}),
         },
       }),
     };
@@ -111,7 +137,12 @@ export function extractCompletion(providerId: string, data: unknown): string {
   const body = data as Record<string, any>;
   if (body?.error) {
     const message = typeof body.error === 'string' ? body.error : body.error?.message ?? JSON.stringify(body.error);
-    throw new Error(`Provider error: ${String(message).slice(0, 300)}`);
+    const text = String(message).slice(0, 300);
+    if (RETIRED_MODEL.test(text)) {
+      const current = CURRENT_MODEL[providerId] ?? 'a current model id';
+      throw new Error(`Provider error: ${text}. If that model was retired, set a current id in Settings → AI providers (e.g. ${current}).`);
+    }
+    throw new Error(`Provider error: ${text}`);
   }
 
   if (providerId === 'gemini') {
@@ -169,6 +200,9 @@ async function send(provider: ProviderConfig, opts: CompleteOpts): Promise<strin
 
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 300);
+      if (RETIRED_MODEL.test(detail) || (provider.id === 'gemini' && res.status === 404)) {
+        throw new Error(retiredModelMessage(provider));
+      }
       // Some OpenAI-compatible servers reject response_format; retry once without it.
       if (opts.json && res.status === 400 && /response_format|json_object/i.test(detail)) {
         return send(provider, { ...opts, json: false });
@@ -180,7 +214,7 @@ async function send(provider: ProviderConfig, opts: CompleteOpts): Promise<strin
       return extractCompletion(provider.id, data);
     } catch (err) {
       // Gemini Pro: thinking consumed the whole budget. Retry once with the minimum.
-      if (provider.id === 'gemini' && !isFlash(provider.model) && err instanceof Error && /MAX_TOKENS|empty completion/.test(err.message)) {
+      if (provider.id === 'gemini' && !isGemini3(provider.model) && !isFlash(provider.model) && err instanceof Error && /MAX_TOKENS|empty completion/.test(err.message)) {
         const retry = buildRequest(provider, opts, true);
         const retryRes = await fetch(retry.url, { method: 'POST', headers: retry.headers, body: retry.body, signal: controller.signal });
         if (!retryRes.ok) throw new Error(`Gemini ${retryRes.status}: ${(await retryRes.text()).slice(0, 300)}`);

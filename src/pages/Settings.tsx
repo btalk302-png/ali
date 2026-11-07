@@ -23,6 +23,15 @@ import { useApi, useToast } from '../lib/context';
 import { Button, Card, Field, Pill, Toggle } from '../components/ui';
 
 type ProviderRow = Settings['providers'][number] & { hasKey?: boolean };
+
+/** Suggestions only — the field stays free text so a new model id never needs a release. */
+const MODEL_SUGGESTIONS: Record<string, string[]> = {
+  gemini: ['gemini-3.8-flash', 'gemini-3-pro', 'gemini-2.5-flash'],
+  openai: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'],
+  openrouter: ['openai/gpt-4o-mini', 'google/gemini-3.8-flash', 'anthropic/claude-sonnet-4-5'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  anthropic: ['claude-sonnet-4-5', 'claude-opus-4-1'],
+};
 type SettingsForm = Omit<Settings, 'providers'> & { providers: ProviderRow[] };
 
 const SECTIONS = [
@@ -49,11 +58,28 @@ export function SettingsPage() {
   const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>('providers');
   const [form, setForm] = useState<SettingsForm | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [sectionFlash, setSectionFlash] = useState(false);
   const [tests, setTests] = useState<Record<string, { ok: boolean; message: string; latencyMs: number }>>({});
 
   useEffect(() => {
     if (data?.settings) setForm(structuredClone(data.settings));
   }, [data?.settings]);
+
+  // The sidebar "Manage keys" link asks for a specific card when Settings is already open.
+  useEffect(() => {
+    const jump = (event: Event) => {
+      const wanted = (event as CustomEvent<string>).detail;
+      if (SECTIONS.some((s) => s.id === wanted)) {
+        setSection(wanted as (typeof SECTIONS)[number]['id']);
+        setSectionFlash(true);
+        window.setTimeout(() => setSectionFlash(false), 1200);
+        window.setTimeout(() => document.getElementById(`section-${wanted}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+      }
+    };
+    window.addEventListener('cp-settings-section', jump);
+    return () => window.removeEventListener('cp-settings-section', jump);
+  }, []);
 
   const save = async () => {
     if (!form) return;
@@ -94,7 +120,11 @@ export function SettingsPage() {
   };
 
   const reset = async () => {
-    if (!window.confirm('Delete every project and rendered file in this workspace? Settings and keys are kept.')) return;
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    setConfirmReset(false);
     setBusy('reset');
     try {
       await post('/reset');
@@ -131,7 +161,11 @@ export function SettingsPage() {
           ))}
         </div>
 
-        <div className="stack">
+        <div
+          className="stack"
+          id={`section-${section}`}
+          style={sectionFlash ? { outline: '2px solid rgba(124,107,255,0.65)', outlineOffset: 8, borderRadius: 16, transition: 'outline 0.2s' } : { transition: 'outline 0.2s' }}
+        >
           {section === 'channel' && (
             <>
               <Card title="Channel profile" subtitle="Used in every prompt and package">
@@ -214,12 +248,35 @@ export function SettingsPage() {
                           onChange={(e) => setForm({ ...form, providers: form.providers.map((x) => (x.id === p.id ? { ...x, apiKey: e.target.value } : x)) })}
                         />
                       </Field>
-                      <Field label="Model">
-                        <input className="input" value={p.model} onChange={(e) => setForm({ ...form, providers: form.providers.map((x) => (x.id === p.id ? { ...x, model: e.target.value } : x)) })} />
+                      <Field
+                        label="Model"
+                        hint={
+                          <span>
+                            Type any model id. Suggested: {(MODEL_SUGGESTIONS[p.id] ?? []).slice(0, 2).join(' · ')}
+                          </span>
+                        }
+                      >
+                        <input
+                          className="input"
+                          list={`models-${p.id}`}
+                          value={p.model}
+                          onChange={(e) => setForm({ ...form, providers: form.providers.map((x) => (x.id === p.id ? { ...x, model: e.target.value } : x)) })}
+                        />
+                        <datalist id={`models-${p.id}`}>
+                          {(MODEL_SUGGESTIONS[p.id] ?? []).map((m) => <option key={m} value={m} />)}
+                        </datalist>
                       </Field>
                     </div>
                     <div className="row" style={{ gap: 8, marginTop: 10 }}>
-                      <Button size="sm" variant="ghost" icon={<Zap size={13} />} onClick={() => test('text', p.id)} loading={busy === `test-text-${p.id}`} disabled={!p.apiKey && !p.hasKey}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<Zap size={13} />}
+                        onClick={() => test('text', p.id)}
+                        loading={busy === `test-text-${p.id}`}
+                        disabled={!p.apiKey && !p.hasKey}
+                        title={!p.apiKey && !p.hasKey ? 'Add an API key for this provider first, then save' : 'Call the provider once to verify the key'}
+                      >
                         Test connection
                       </Button>
                       {tests[`text-${p.id}`] && (
@@ -395,7 +452,20 @@ export function SettingsPage() {
                 <div className="row" style={{ gap: 8 }}><Youtube size={14} />Publishing is not wired — export the MP4 and upload it yourself.</div>
               </div>
               <div className="row wrap" style={{ gap: 8, marginTop: 16 }}>
-                <Button variant="danger" icon={<Trash2 size={14} />} onClick={reset} loading={busy === 'reset'}>Clear all projects &amp; renders</Button>
+                {confirmReset ? (
+                  <>
+                    <Button variant="danger" icon={<Trash2 size={14} />} onClick={reset} loading={busy === 'reset'}>
+                      Yes, delete everything
+                    </Button>
+                    <Button variant="ghost" onClick={() => setConfirmReset(false)} disabled={busy === 'reset'}>
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="danger" icon={<Trash2 size={14} />} onClick={reset}>
+                    Clear all projects &amp; renders
+                  </Button>
+                )}
               </div>
               <div className="note warn" style={{ marginTop: 14, fontSize: 11.5 }}>
                 <Trash2 size={13} />

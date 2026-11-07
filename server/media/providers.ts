@@ -108,6 +108,16 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
   return res;
 }
 
+/** Turns a retired/unknown model id into a pointer at the settings field that fixes it. */
+function mediaModelHint(kind: 'image' | 'voice', model: string, err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  const room = kind === 'image' ? 'Settings → Voice & visuals → Image model' : 'Settings → Voice & visuals → Speech model';
+  if (/404|not found|not supported|no longer available|does not exist/i.test(message)) {
+    return new Error(`Model “${model}” is not available on your Google key (${message.slice(0, 160)}). Set a current one in ${room}.`);
+  }
+  return err instanceof Error ? err : new Error(message);
+}
+
 /* ------------------------------------------------------------------ images */
 
 export async function generateImage(
@@ -129,7 +139,9 @@ export async function generateImage(
       },
       { 'x-goog-api-key': key },
       180_000,
-    );
+    ).catch((err) => {
+      throw mediaModelHint('image', model, err);
+    });
     const data = (await res.json()) as { candidates?: { content?: { parts?: any[] } }[] };
     const parts = data.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {
@@ -222,7 +234,9 @@ export async function generateSpeech(
       },
       { 'x-goog-api-key': key },
       180_000,
-    );
+    ).catch((err) => {
+      throw mediaModelHint('voice', model, err);
+    });
     const data = (await res.json()) as { candidates?: { content?: { parts?: any[] } }[] };
     const parts = data.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {

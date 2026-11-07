@@ -349,9 +349,23 @@ export function Workspace() {
               const st = project.stages[stage];
               return (
                 <Fragment key={stage}>
-                  <button className={`stage-node ${tab === TAB_FOR_STAGE[stage] ? 'active' : ''}`} onClick={() => setTab(TAB_FOR_STAGE[stage])}>
-                    <span className={`stage-dot ${st.status}`}>
-                      {st.status === 'done' ? <Check size={9} strokeWidth={3} /> : st.status === 'failed' ? <X size={9} strokeWidth={3} /> : st.status === 'running' ? '•' : i + 1}
+                  <button
+                    className={`stage-node ${tab === TAB_FOR_STAGE[stage] ? 'active' : ''}`}
+                    onClick={() => setTab(TAB_FOR_STAGE[stage])}
+                    title={st.relayKey ? 'Waiting for your browser to fetch this request' : st.message ?? undefined}
+                  >
+                    <span className={`stage-dot ${st.relayKey ? 'running' : st.status}`}>
+                      {st.relayKey ? (
+                        <Loader2 size={9} className="spin" />
+                      ) : st.status === 'done' ? (
+                        <Check size={9} strokeWidth={3} />
+                      ) : st.status === 'failed' ? (
+                        <X size={9} strokeWidth={3} />
+                      ) : st.status === 'running' ? (
+                        '•'
+                      ) : (
+                        i + 1
+                      )}
                     </span>
                     {stageLabels[stage]}
                   </button>
@@ -678,8 +692,8 @@ function VisualsTab({
         subtitle={`${v.scenes.length} scenes · ${v.style}`}
         right={
           <div className="row" style={{ gap: 6 }}>
-            <Button size="sm" variant={tab === 'scenes' ? 'primary' : 'ghost'} onClick={() => setTab('scenes')}>Scenes</Button>
-            <Button size="sm" variant={tab === 'thumbs' ? 'primary' : 'ghost'} onClick={() => setTab('thumbs')}>Thumbnails</Button>
+            <Button size="sm" variant={tab === 'scenes' ? 'primary' : 'ghost'} aria-pressed={tab === 'scenes'} onClick={() => setTab('scenes')}>Scenes</Button>
+            <Button size="sm" variant={tab === 'thumbs' ? 'primary' : 'ghost'} aria-pressed={tab === 'thumbs'} onClick={() => setTab('thumbs')}>Thumbnails</Button>
             <Button size="sm" variant="ghost" icon={<RefreshCw size={13} />} onClick={onRegenerate} loading={busy}>Regenerate</Button>
           </div>
         }

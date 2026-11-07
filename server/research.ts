@@ -133,7 +133,7 @@ async function geminiGrounding(settings: Settings, query: string): Promise<{ sou
   if (!key) return { sources: [], notes: '' };
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(gemini?.model || 'gemini-3.8-flash')}:generateContent`,
       {
         method: 'POST',
         signal: timeout(45_000),

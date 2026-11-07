@@ -424,15 +424,33 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
           subtitle="Edit the prompt or script for this clip, then regenerate just this take. Nothing else changes."
           right={
             <div className="row" style={{ gap: 6 }}>
-              <Button size="sm" variant="ghost" icon={<ArrowUp size={13} />} onClick={() => move('up')} disabled={current.index === 0 || busy === 'move'} />
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<ArrowUp size={13} />}
+                onClick={() => move('up')}
+                disabled={current.index === 0 || busy === 'move'}
+                title={current.index === 0 ? 'This is already the first clip' : 'Move this clip earlier'}
+                aria-label="Move clip up"
+              />
               <Button
                 size="sm"
                 variant="ghost"
                 icon={<ArrowDown size={13} />}
                 onClick={() => move('down')}
                 disabled={current.index === scenes.length - 1 || busy === 'move'}
+                title={current.index === scenes.length - 1 ? 'This is already the last clip' : 'Move this clip later'}
+                aria-label="Move clip down"
               />
-              <Button size="sm" variant="ghost" icon={<Trash2 size={13} />} onClick={remove} loading={busy === 'delete'} />
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Trash2 size={13} />}
+                onClick={remove}
+                loading={busy === 'delete'}
+                title="Remove this clip from the cut"
+                aria-label="Delete clip"
+              />
             </div>
           }
         >
@@ -469,6 +487,7 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
                   onClick={regenerateVoice}
                   loading={busy === 'regen-voice'}
                   disabled={!config?.tts.resolved}
+                  title={config?.tts.resolved ? 'Regenerate the narration for this clip' : 'Add a Google AI Studio or OpenAI key to generate narration'}
                 >
                   Re-voice
                 </Button>
@@ -514,7 +533,13 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
                     onChange={(e) => { setDurationDraft(Number(e.target.value)); setDirty(true); }}
                   />
                 </div>
-                <Button size="sm" onClick={saveClip} loading={busy === 'save'} disabled={!dirty}>
+                <Button
+                  size="sm"
+                  onClick={saveClip}
+                  loading={busy === 'save'}
+                  disabled={!dirty}
+                  title={dirty ? 'Save this clip’s prompt, narration and length' : 'Change the prompt, narration or length first'}
+                >
                   Save clip
                 </Button>
                 <span className="faint" style={{ fontSize: 11 }}>
