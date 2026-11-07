@@ -10,7 +10,8 @@
     "start": "tsx server/index.ts",
     "serve": "npm run build && tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "smoke:ui": "tsx scripts/ui-smoke.tsx"
+    "smoke:ui": "tsx scripts/ui-smoke.tsx",
+    "check:keys": "tsx scripts/check-keys.ts"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",

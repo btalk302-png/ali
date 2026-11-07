@@ -45,6 +45,14 @@ No key? The app says so plainly and every button explains what is missing. It ne
 
 `ffmpeg` and `sharp` ship as npm dependencies, so MP4 export works without a system install.
 
+## Verify your keys
+
+```bash
+npm run check:keys
+```
+
+Calls every saved provider once and prints latency plus the exact error — so a bad key, a wrong model id or a blocked network is obvious before you start a project. A sandbox/preview server without outbound internet will report `ECONNRESET` for every host; run it locally in that case.
+
 ## The flow
 
 ```

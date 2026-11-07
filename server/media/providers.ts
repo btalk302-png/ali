@@ -99,7 +99,7 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
       /* keep raw */
     }
     const code = (err as { cause?: { code?: string } })?.cause?.code ?? (err instanceof Error ? err.message : 'network error');
-    throw new Error(`Could not reach ${host} from this server — ${code}. The renderer falls back to studio art when this happens.`);
+    throw new Error(`Could not reach ${host} from this server — ${code}. Images fall back to studio art and narration is skipped when this happens.`);
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 400);
