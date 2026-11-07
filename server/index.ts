@@ -19,7 +19,7 @@ import { runResearch } from './research.js';
 import { evaluateQuality } from './quality.js';
 import { thumbnailSvg } from './thumbnails.js';
 import { submitRelay, testProvider } from './ai.js';
-import { getSpec } from './relay.js';
+import { getSpec, rememberHttp } from './relay.js';
 import { clamp, round, slug } from './util.js';
 import {
   absoluteMedia,
@@ -551,7 +551,11 @@ app.post('/api/relay/:key', (req, res) => {
   if (!spec) return res.status(404).json({ error: 'This relay expired. Run the stage again to get a fresh request.' });
   const body = req.body ?? {};
   try {
-    const text = submitRelay(spec.providerId, spec.key, body.response ?? body);
+    const payload = body.response ?? body;
+    const text =
+      spec.kind === 'http'
+        ? (rememberHttp(spec.request.url, payload), `${spec.providerLabel} response cached`)
+        : submitRelay(spec.providerId, spec.key, payload);
     const project = body.projectId ? findProject(String(body.projectId)) : undefined;
     const stage = String(body.stage ?? '');
     if (project && stage && (STAGE_ORDER as string[]).includes(stage)) {

@@ -1,5 +1,6 @@
 import type { Research, ResearchSource, ResearchVideo, Settings, TitleCandidate } from '../shared/types.js';
 import { aiJson, RelayNeeded } from './ai.js';
+import { getJson } from './remote.js';
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -68,30 +69,21 @@ async function youtubeSearch(settings: Settings, query: string, limit: number): 
     relevanceLanguage: settings.research.language || 'en',
     key,
   });
-  const res = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`, { signal: timeout(30_000) });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`YouTube search failed (${res.status}): ${body.slice(0, 240)}`);
-  }
-  const data = (await res.json()) as {
+  const data = await getJson<{
     items?: { id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; publishedAt?: string } }[];
-  };
+  }>(`https://www.googleapis.com/youtube/v3/search?${params}`, { label: 'YouTube search' });
   const items = (data.items ?? []).filter((i) => i.id?.videoId);
   if (!items.length) return [];
   const ids = items.map((i) => i.id!.videoId!).join(',');
   const detailParams = new URLSearchParams({ part: 'snippet,statistics,contentDetails', id: ids, key });
-  const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`, { signal: timeout(30_000) });
-  if (!detailRes.ok) {
-    throw new Error(`YouTube video details failed (${detailRes.status}): ${(await detailRes.text()).slice(0, 240)}`);
-  }
-  const details = (await detailRes.json()) as {
+  const details = await getJson<{
     items?: {
       id?: string;
       snippet?: { title?: string; channelTitle?: string; publishedAt?: string };
       statistics?: { viewCount?: string };
       contentDetails?: { duration?: string };
     }[];
-  };
+  }>(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`, { label: 'YouTube video details' });
   return (details.items ?? []).map((item) => ({
     videoId: item.id ?? '',
     title: item.snippet?.title ?? '',
@@ -107,24 +99,28 @@ async function youtubeSearch(settings: Settings, query: string, limit: number): 
 async function wikipediaContext(query: string): Promise<{ sources: ResearchSource[]; extract: string }> {
   try {
     const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=2&format=json&origin=*`;
-    const searchRes = await fetch(searchUrl, { signal: timeout(15_000) });
-    if (!searchRes.ok) return { sources: [], extract: '' };
-    const search = (await searchRes.json()) as { query?: { search?: { title?: string }[] } };
+    const search = await getJson<{ query?: { search?: { title?: string }[] } }>(searchUrl, { label: 'Wikipedia search', timeoutMs: 15_000 });
     const titles = (search.query?.search ?? []).map((s) => s.title).filter(Boolean) as string[];
     const sources: ResearchSource[] = [];
     let extract = '';
     for (const title of titles.slice(0, 2)) {
-      const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, {
-        signal: timeout(15_000),
-      });
-      if (!summaryRes.ok) continue;
-      const summary = (await summaryRes.json()) as { extract?: string; content_urls?: { desktop?: { page?: string } } };
+      let summary: { extract?: string; content_urls?: { desktop?: { page?: string } } };
+      try {
+        summary = await getJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, {
+          label: 'Wikipedia article',
+          timeoutMs: 15_000,
+        });
+      } catch (err) {
+        if (err instanceof RelayNeeded) throw err;
+        continue;
+      }
       if (summary.extract) extract += `${summary.extract} `;
       const url = summary.content_urls?.desktop?.page;
       if (url) sources.push({ label: `Wikipedia — ${title}`, url, kind: 'wikipedia' });
     }
     return { sources, extract: extract.trim().slice(0, 1200) };
-  } catch {
+  } catch (err) {
+    if (err instanceof RelayNeeded) throw err;
     return { sources: [], extract: '' };
   }
 }

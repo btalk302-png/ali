@@ -125,26 +125,49 @@ export function Workspace() {
   const stuck = project ? stageOrder.map((id) => ({ id, state: project.stages[id] })).find((row) => row.state?.relayKey) : undefined;
 
   const relayThroughBrowser = async () => {
-    if (!project || !stuck?.state?.relayKey) return;
-    const key = stuck.state.relayKey;
+    if (!project) return;
     setBusy('relay');
     try {
-      const spec = await get<{ relay: { providerLabel: string; request: { url: string; method: string; headers: Record<string, string>; body: string } } }>(`/relay/${key}`);
-      let res: Response;
-      try {
-        res = await fetch(spec.relay.request.url, { method: spec.relay.request.method, headers: spec.relay.request.headers, body: spec.relay.request.body });
-      } catch {
-        throw new Error(
-          `Your browser could not send the request to ${spec.relay.providerLabel} — the provider blocked the cross-origin call (CORS). Gemini allows this; some providers do not. Switch the active provider in Settings.`,
-        );
+      let current = project;
+      let rounds = 0;
+      // One click should finish the stage even when it needs several requests
+      // (YouTube search → video details → Wikipedia → the model call).
+      for (;;) {
+        const next = stageOrder.map((id) => ({ id, state: current.stages[id] })).find((row) => row.state?.relayKey);
+        if (!next?.state?.relayKey || rounds >= 6) break;
+        rounds++;
+        const key = next.state.relayKey;
+        const spec = await get<{ relay: { providerLabel: string; kind: string; request: { url: string; method: string; headers: Record<string, string>; body: string } } }>(`/relay/${key}`);
+        const req = spec.relay.request;
+        let res: Response;
+        try {
+          res = await fetch(req.url, {
+            method: req.method,
+            headers: req.headers,
+            ...(req.method === 'POST' ? { body: req.body } : {}),
+          });
+        } catch {
+          throw new Error(
+            `Your browser could not send the request to ${spec.relay.providerLabel} — the provider blocked the cross-origin call (CORS). Gemini and the YouTube Data API allow this; some providers do not.`,
+          );
+        }
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = payload?.error?.message ?? payload?.error ?? `the provider answered ${res.status}`;
+          throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 240));
+        }
+        await post(`/relay/${key}`, { response: payload, projectId: current.id, stage: next.id });
+
+        // wait until the resumed stage either finishes or asks for the next request
+        for (let i = 0; i < 25; i++) {
+          await new Promise((r) => setTimeout(r, 600));
+          const fresh = await get<{ project: Project; job?: { status?: string } }>(`/projects/${current.id}`);
+          current = fresh.project;
+          const again = stageOrder.some((id) => current.stages[id].relayKey);
+          if (again || fresh.job?.status !== 'running') break;
+        }
       }
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const detail = payload?.error?.message ?? payload?.error ?? `the provider answered ${res.status}`;
-        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 240));
-      }
-      await post(`/relay/${key}`, { response: payload, projectId: project.id, stage: stuck.id });
-      push('Fetched by your browser — stage resumed', 'success');
+      push(rounds > 1 ? `Fetched ${rounds} requests in your browser — stage resumed` : 'Fetched in your browser — stage resumed', 'success');
       refresh();
     } catch (err) {
       push(err instanceof Error ? err.message : 'Browser relay failed', 'error');

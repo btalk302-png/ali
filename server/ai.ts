@@ -1,5 +1,6 @@
 import type { ProviderConfig, Settings } from '../shared/types.js';
-import { cachedCompletion, registerSpec, rememberCompletion, relayKey, type RelayRequest } from './relay.js';
+import { cachedCompletion, registerSpec, rememberCompletion, relayKey, RelayNeeded, type RelayRequest } from './relay.js';
+export { RelayNeeded };
 
 const ENV_KEYS: Record<string, string | undefined> = {
   gemini: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
@@ -38,21 +39,6 @@ export class ProviderUnreachable extends Error {
     readonly code: string,
   ) {
     super(`Could not reach ${label} (${host}) from this server — ${code}.`);
-  }
-}
-
-/**
- * The server cannot reach the provider, but the browser can. The stage stops
- * here with this error; the UI fetches `request` and posts the response back.
- */
-export class RelayNeeded extends Error {
-  constructor(
-    readonly key: string,
-    readonly providerLabel: string,
-    readonly request: RelayRequest,
-    readonly reason: string,
-  ) {
-    super(`This server has no route to ${providerLabel}. Use “Fetch with my browser” to finish the stage.`);
   }
 }
 
@@ -221,7 +207,7 @@ export async function aiComplete(settings: Settings, opts: CompleteOpts): Promis
   } catch (err) {
     if (err instanceof ProviderUnreachable) {
       const request = buildRequest(provider, opts, true);
-      registerSpec({ key, providerId: provider.id, providerLabel: provider.label, request, reason: err.message, createdAt: new Date().toISOString() });
+      registerSpec({ key, kind: 'ai', providerId: provider.id, providerLabel: provider.label, request, reason: err.message, createdAt: new Date().toISOString() });
       throw new RelayNeeded(key, provider.label, request, err.message);
     }
     throw err;

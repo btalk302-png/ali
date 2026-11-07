@@ -10,13 +10,27 @@ import { createHash } from 'node:crypto';
 
 export interface RelayRequest {
   url: string;
-  method: 'POST';
+  method: 'GET' | 'POST';
   headers: Record<string, string>;
   body: string;
 }
 
+/** A stage needs the browser to make one HTTP call on its behalf. */
+export class RelayNeeded extends Error {
+  constructor(
+    readonly key: string,
+    readonly providerLabel: string,
+    readonly request: RelayRequest,
+    readonly reason: string,
+  ) {
+    super(`This server has no route to ${providerLabel}. Use “Fetch with my browser” to finish the stage.`);
+  }
+}
+
 export interface RelaySpec {
   key: string;
+  /** 'ai' → provider completion (posted as provider JSON); 'http' → plain JSON GET */
+  kind: 'ai' | 'http';
   providerId: string;
   providerLabel: string;
   request: RelayRequest;
@@ -26,6 +40,7 @@ export interface RelaySpec {
 
 const specs = new Map<string, RelaySpec>();
 const completions = new Map<string, string>();
+const httpResponses = new Map<string, unknown>();
 const TTL_MS = 30 * 60 * 1000;
 
 export function relayKey(parts: unknown[]): string {
@@ -57,6 +72,19 @@ export function cachedCompletion(key: string): string | undefined {
 
 export function clearRelay(key: string): void {
   specs.delete(key);
+}
+
+/** Cached JSON body for a relayed GET, keyed by the URL that was fetched. */
+export function rememberHttp(url: string, data: unknown): void {
+  httpResponses.set(url, data);
+  if (httpResponses.size > 60) {
+    const first = httpResponses.keys().next();
+    if (!first.done) httpResponses.delete(first.value);
+  }
+}
+
+export function cachedHttp(url: string): unknown {
+  return httpResponses.get(url);
 }
 
 function prune() {

@@ -50,8 +50,11 @@ No key? The app says so plainly and every button explains what is missing. It ne
 Hosted preview sandboxes usually block outbound traffic, so the server cannot call Gemini/OpenAI even with a valid key. Instead of failing, the app hands the exact request to your browser:
 
 1. The stage stops with **“This server has no route to Google Gemini”** and a `relayKey` is attached to that stage.
-2. Click **Fetch with my browser** — the browser sends that one request using your stored key, then posts the provider's JSON back.
-3. The completion is cached under the same prompt hash, so the stage resumes and finishes without another network call.
+2. Click **Fetch with my browser** — the browser sends that request using your stored key, then posts the provider's JSON back.
+3. The answer is cached (by prompt hash, or by URL for plain GETs) so the stage resumes without touching the network again.
+4. One click chains every request a stage needs: YouTube search → video statistics → Wikipedia → the model call. Research on a blocked server took 10 relayed requests in testing, finishing at 7/7 stages with real view counts and cited sources.
+
+Relayed GETs cover the research data sources — `googleapis.com/youtube/v3/search`, `/videos` and Wikipedia — so title research works even when the server cannot reach YouTube.
 
 Gemini's native endpoint allows this (CORS permits `content-type` + `x-goog-api-key`). Some providers, notably OpenAI, reject browser calls — switch the active provider if the relay reports a CORS block. For real work, running the app locally is still the better path.
 
