@@ -17,7 +17,7 @@ import { post } from '../lib/api';
 import { useApi, useLive, useToast } from '../lib/context';
 import type { ProjectStatus, StageId } from '../../shared/types';
 import { Button, Card, Empty, Pill, ProgressBar, StatusPill } from '../components/ui';
-import { clock, dateTimeLabel, stageLabels, stageOrder, timeAgo } from '../lib/format';
+import { clock, dateTimeLabel, downloadFile, stageLabels, stageOrder, timeAgo } from '../lib/format';
 
 interface ProjectRow {
   id: string;
@@ -61,6 +61,18 @@ export function Pipeline() {
 
   const items = useMemo(() => data?.items ?? [], [data]);
   const counts = data?.counts ?? {};
+
+  const downloadMp4 = async (p: { id: string; title: string }) => {
+    setBusy(`dl-${p.id}`);
+    try {
+      await downloadFile(`/api/projects/${p.id}/download`, `${(p.title || 'video').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.mp4`);
+      push('MP4 saved to your downloads', 'success');
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Download failed', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const run = async (id: string, fromStage?: StageId) => {
     setBusy(id);
@@ -195,9 +207,14 @@ export function Pipeline() {
                       )}
                       {p.status === 'generating' && <Pill tone="violet"><RefreshCw size={10} className="spin" /> running</Pill>}
                       {p.production && (
-                        <a className="btn btn-sm btn-ghost" href={`/api/projects/${p.id}/download`} title="Download the MP4">
-                          <Download size={12} />
-                        </a>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<Download size={12} />}
+                          onClick={() => downloadMp4(p)}
+                          loading={busy === `dl-${p.id}`}
+                          title={`Download the MP4 (${clock(p.production.durationSec ?? 0)})`}
+                        />
                       )}
                     </div>
                   </div>

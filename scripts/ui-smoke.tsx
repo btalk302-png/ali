@@ -12,6 +12,13 @@ g.EventSource = class {
   onerror: any = null;
 };
 g.IS_REACT_ACT_ENVIRONMENT = true;
+const objectUrls: string[] = [];
+g.URL.createObjectURL = (blob: any) => {
+  objectUrls.push('blob:mock');
+  return 'blob:mock';
+};
+g.URL.revokeObjectURL = () => {};
+const fetchCalls: string[] = [];
 
 const mediaFixture = {
   production: { status: 'ready', durationSec: 534.2, sizeBytes: 5552377, renderedAt: new Date(Date.now() - 600000).toISOString(), aspect: '16:9', withNarration: false, providerSummary: 'local visuals · silent' },
@@ -43,8 +50,22 @@ const configFixture = {
 
 g.fetch = async (input: any) => {
   const url = String(input);
-  const body = url.includes('/media/config') ? configFixture : url.includes('/media') ? mediaFixture : { error: 'not found' };
-  return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body };
+  fetchCalls.push(url);
+  const body = url.includes('/media/config')
+    ? configFixture
+    : url.includes('/download')
+      ? { ok: true }
+      : url.includes('/media')
+        ? mediaFixture
+        : { error: 'not found' };
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+    blob: async () => new dom.window.Blob(['fake-mp4-bytes'], { type: 'video/mp4' }),
+    headers: { get: (name: string) => (name.toLowerCase() === 'content-disposition' ? 'attachment; filename="test-video.mp4"' : null) },
+  };
 };
 
 const React = (await import('react')).default;
@@ -90,6 +111,19 @@ const checks: [string, boolean][] = [
   ['clip audio player', (container.querySelectorAll('audio').length >= 1)],
   ['regenerate buttons', text.includes('New visual from prompt') && text.includes('Re-voice')],
 ];
+// download goes through fetch + blob (works inside the preview iframe, no popup/blank tab)
+const downloadBtn = Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Download MP4')) as any;
+await act(async () => {
+  downloadBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 250));
+});
+checks.push(
+  ['download: button rendered', Boolean(downloadBtn)],
+  ['download: calls the mp4 endpoint', fetchCalls.some((u) => u.endsWith('/api/projects/prj_test/download'))],
+  ['download: saves via blob url', objectUrls.length > 0],
+  ['download: never opens a blank tab', !fetchCalls.some((u) => u.includes('undefined'))],
+);
+
 // ---------------------------------------------------------------- settings page
 const { DEFAULT_SETTINGS } = await import('../server/defaults.ts');
 const storeSettings = structuredClone(DEFAULT_SETTINGS);

@@ -56,15 +56,17 @@ export function evaluateQuality(project: Project): Quality {
       detail: `${wordCount(script.hook)} words in the opening line (~${Math.round((wordCount(script.hook) / script.wpm) * 60)}s)`,
       fix: 'Cut the first sentence and start on the tension',
     });
+    const minimum = project.format === 'short' ? 3 : 6;
+    const thin = script.beats.filter((b) => wordCount(b.narration) <= 12);
     add({
       id: 'beats',
       label: 'Beat structure is complete',
-      status:
-        script.beats.length >= (project.format === 'short' ? 3 : 6) && script.beats.every((b) => wordCount(b.narration) > 12)
-          ? 'pass'
-          : 'fail',
-      detail: `${script.beats.length} beats · each with narration and b-roll direction`,
-      fix: 'Regenerate the script with more beats',
+      status: script.beats.length >= minimum && thin.length === 0 ? 'pass' : 'warn',
+      detail:
+        thin.length > 0
+          ? `${script.beats.length} beats · ${thin.length} too short to speak: ${thin.map((b) => `“${b.title}”`).join(', ')}`
+          : `${script.beats.length} beats (minimum ${minimum}) · each with narration and b-roll direction`,
+      fix: thin.length ? 'Expand the short beats in the Script tab, or regenerate the script' : 'Regenerate the script with more beats',
     });
     add({
       id: 'cta',

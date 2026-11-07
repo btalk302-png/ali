@@ -1,5 +1,5 @@
 import type { Beat, Project, Scene, Script, Seo, Settings, Strategy, ThumbnailConcept, Visuals } from '../shared/types.js';
-import { aiComplete, parseJson, requireProvider } from './ai.js';
+import { aiJson, requireProvider } from './ai.js';
 import { keywordsOf } from './research.js';
 import { nowIso, uid, wordCount } from './util.js';
 
@@ -13,6 +13,43 @@ const PALETTES: Record<string, [string, string, string]> = {
 };
 
 const clamp01 = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+
+/** Coerces "1:30", "90s", "2 min", "1,5" or 90 into seconds. Returns 0 when unusable. */
+function seconds(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  if (typeof value !== 'string') return 0;
+  const text = value.trim().toLowerCase().replace(',', '.');
+  const clock = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(text);
+  if (clock) {
+    const parts = clock.slice(1).filter((x) => x !== undefined).map(Number);
+    return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
+  }
+  const match = /(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m)?/.exec(text);
+  if (!match) return 0;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(/^(m|min|mins|minute|minutes)$/.test(match[2] ?? '') ? n * 60 : n);
+}
+
+const list = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+
+const text = (value: unknown, fallback = ''): string =>
+  typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : fallback;
+
+/** Array of phrases; accepts ["a b", {point:"c d"}] and a single comma/newline separated string. */
+const strings = (value: unknown): string[] => {
+  const flat = typeof value === 'string' ? value.split(/[\n,]+/) : value;
+  return list<unknown>(flat)
+    .map((item) => (typeof item === 'string' ? item : text((item as any)?.point ?? (item as any)?.text ?? (item as any)?.why)))
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+/** Tag-like values; accepts "#a #b", "a, b" or ["a","b"]. */
+const tokens = (value: unknown): string[] => {
+  const flat = typeof value === 'string' ? value.split(/[\s,]+/) : list<unknown>(value).flatMap((item) => (typeof item === 'string' ? item.split(/[\s,]+/) : [String(item)]));
+  return flat.map((item) => item.trim().replace(/^#+/, '')).filter(Boolean);
+};
 
 export async function strategyStage(project: Project, settings: Settings): Promise<Strategy> {
   requireProvider(settings);
@@ -55,44 +92,55 @@ Return STRICT JSON only:
 }
 Outline must sum to roughly ${targetSec} seconds with ${project.format === 'short' ? '3-4' : '6-8'} sections. Duration values are integers.`;
 
-  const text = await aiComplete(settings, {
+  const parsed = await aiJson<{
+    bigIdea?: unknown;
+    hookAngle?: unknown;
+    hook?: unknown;
+    targetEmotion?: unknown;
+    emotion?: unknown;
+    differentiators?: unknown;
+    angles?: unknown;
+    outline?: unknown;
+    sections?: unknown;
+    beats?: unknown;
+    cta?: unknown;
+    callToAction?: unknown;
+  }>(settings, {
     system: 'You are a YouTube strategist working from real search evidence. Reply with JSON only. No hype, no invented statistics.',
     prompt,
     json: true,
-    maxTokens: 1800,
+    maxTokens: 3000,
   });
-  const parsed = parseJson<{
-    bigIdea?: string;
-    hookAngle?: string;
-    targetEmotion?: string;
-    differentiators?: string[];
-    outline?: { title?: string; purpose?: string; durationSec?: number }[];
-    cta?: string;
-  }>(text);
 
-  const outline = (parsed.outline ?? [])
-    .filter((o) => o.title)
-    .map((o) => ({
-      id: uid('sec'),
-      title: String(o.title),
-      purpose: String(o.purpose ?? ''),
-      durationSec: clamp01(Math.round(Number(o.durationSec ?? targetSec / 6)), 10, 900),
-    }));
-  if (!outline.length) throw new Error('The model returned no outline. Try again or switch provider.');
-  const sum = outline.reduce((s, o) => s + o.durationSec, 0);
-  if (Math.abs(sum - targetSec) / targetSec > 0.25) {
-    // normalise the plan so the runtime promise is respected
-    const factor = targetSec / sum;
-    outline.forEach((o) => (o.durationSec = Math.max(10, Math.round(o.durationSec * factor))));
+  const rawOutline = list<Record<string, unknown>>(parsed.outline ?? parsed.sections ?? parsed.beats);
+  const outline = rawOutline
+    .map((row, i) => {
+      const title = text(row.title ?? row.section ?? row.name, `Section ${i + 1}`);
+      const purpose = text(row.purpose ?? row.goal ?? row.description ?? row.detail);
+      const durationSec = seconds(row.durationSec ?? row.duration ?? row.seconds ?? row.time ?? row.length);
+      return { id: uid('sec'), title, purpose, durationSec };
+    })
+    .filter((row) => row.title.length > 0);
+  if (!outline.length) {
+    throw new Error('The model returned a strategy without an outline. Run the stage again, or switch to a different model in Settings.');
+  }
+  // Any missing/unparseable duration is filled proportionally, then the whole plan is scaled to the promised runtime.
+  const known = outline.filter((o) => o.durationSec > 0).length;
+  const fallback = Math.round(targetSec / Math.max(1, outline.length));
+  outline.forEach((o) => { if (o.durationSec <= 0) o.durationSec = known ? fallback : fallback; });
+  const sum = outline.reduce((acc, o) => acc + o.durationSec, 0);
+  const factor = sum > 0 ? targetSec / sum : 1;
+  if (Math.abs(sum - targetSec) / targetSec > 0.08 || known < outline.length) {
+    outline.forEach((o) => (o.durationSec = clamp01(Math.round(o.durationSec * factor), 10, 900)));
   }
 
   return {
-    bigIdea: parsed.bigIdea?.trim() || research.summary,
-    hookAngle: parsed.hookAngle?.trim() || '',
-    targetEmotion: parsed.targetEmotion?.trim() || 'curiosity',
-    differentiators: (parsed.differentiators ?? []).filter(Boolean).slice(0, 5),
+    bigIdea: text(parsed.bigIdea, research.summary),
+    hookAngle: text(parsed.hookAngle ?? parsed.hook),
+    targetEmotion: text(parsed.targetEmotion ?? parsed.emotion, 'curiosity'),
+    differentiators: strings(parsed.differentiators ?? parsed.angles).slice(0, 5),
     outline,
-    cta: parsed.cta?.trim() || '',
+    cta: text(parsed.cta ?? parsed.callToAction),
     generatedAt: nowIso(),
   };
 }
@@ -127,35 +175,44 @@ Return STRICT JSON only:
 }
 Every beat narration must be full sentences. Beat durations must sum to about ${targetSec} seconds.`;
 
-  const text = await aiComplete(settings, {
+  const parsed = await aiJson<{
+    hook?: unknown;
+    intro?: unknown;
+    beats?: unknown;
+    sections?: unknown;
+    outro?: unknown;
+    cta?: unknown;
+    callToAction?: unknown;
+  }>(settings, {
     system: 'You are a documentary scriptwriter for YouTube. Spoken language only, specific, no filler, no claims you cannot support.',
     prompt,
     json: true,
-    maxTokens: 4000,
+    maxTokens: 5000,
   });
-  const parsed = parseJson<{
-    hook?: string;
-    intro?: string;
-    beats?: { title?: string; narration?: string; bRollPrompt?: string; durationSec?: number }[];
-    outro?: string;
-    cta?: string;
-  }>(text);
 
-  const beats: Beat[] = (parsed.beats ?? [])
-    .filter((b) => b.narration)
-    .map((b, i) => ({
-      id: uid('beat'),
-      title: String(b.title || strategy.outline[i]?.title || `Beat ${i + 1}`),
-      narration: String(b.narration).trim(),
-      bRollPrompt: String(b.bRollPrompt || 'cinematic illustration of the idea, no text'),
-      durationSec: Math.max(15, Math.round(Number(b.durationSec ?? (wordCount(String(b.narration)) / WPM) * 60))),
-    }));
-  if (beats.length < 3) throw new Error('The model returned too few beats. Try again.');
+  const beats: Beat[] = list<Record<string, unknown>>(parsed.beats ?? parsed.sections)
+    .map((row, i) => {
+      const narration = text(row.narration ?? row.script ?? row.text ?? row.line);
+      if (!narration) return null;
+      const prompt = text(row.bRollPrompt ?? row.broll ?? row.visual ?? row.visualPrompt, 'cinematic illustration of the idea, no text');
+      const planned = seconds(row.durationSec ?? row.duration ?? row.seconds ?? row.time);
+      return {
+        id: uid('beat'),
+        title: text(row.title ?? row.name, strategy.outline[i]?.title ?? `Beat ${i + 1}`),
+        narration,
+        bRollPrompt: prompt,
+        durationSec: planned > 0 ? Math.max(5, planned) : Math.max(8, Math.round((wordCount(narration) / WPM) * 60)),
+      } satisfies Beat;
+    })
+    .filter((b): b is Beat => Boolean(b));
+  if (beats.length < 3) {
+    throw new Error('The model returned a script with fewer than three beats. Run the stage again, or switch to a different model in Settings.');
+  }
 
-  const hook = (parsed.hook ?? beats[0].narration).trim();
-  const intro = (parsed.intro ?? '').trim();
-  const outro = (parsed.outro ?? '').trim();
-  const cta = (parsed.cta ?? strategy.cta).trim();
+  const hook = text(parsed.hook, beats[0].narration);
+  const intro = text(parsed.intro);
+  const outro = text(parsed.outro);
+  const cta = text(parsed.cta ?? parsed.callToAction, strategy.cta);
   const fullText = [hook, intro, ...beats.map((b) => b.narration), outro, cta].filter(Boolean).join('\n\n');
   const words = wordCount(fullText);
 
@@ -175,10 +232,11 @@ Every beat narration must be full sentences. Beat durations must sum to about ${
 }
 
 interface VisualAi {
-  style?: string;
-  palette?: string[];
+  style?: unknown;
+  palette?: unknown;
   scenes?: { beatIndex?: number; title?: string; prompt?: string; composition?: string; transition?: string }[];
   thumbnails?: { headline?: string; subline?: string; composition?: string; variant?: string; palette?: string[] }[];
+  [key: string]: unknown;
 }
 
 export async function visualsStage(project: Project, settings: Settings): Promise<Visuals> {
@@ -204,28 +262,31 @@ Return STRICT JSON only:
 }
 Exactly ${script.beats.length} scenes (one per beat, same order) and 4 thumbnails using each variant once. Headlines must be 1-3 short words that read at 120px.`;
 
-  const text = await aiComplete(settings, {
+  const parsed = await aiJson<VisualAi>(settings, {
     system: 'You are an art director for YouTube. Concrete, shootable image prompts. Reply with JSON only.',
     prompt,
     json: true,
-    maxTokens: 3000,
+    maxTokens: 4000,
   });
-  const parsed = parseJson<VisualAi>(text);
-
-  const palette = (parsed.palette ?? []).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
+  const aiScenes = list<NonNullable<VisualAi['scenes']>[number]>(parsed.scenes ?? (parsed as any).shots ?? (parsed as any).frames);
+  const aiThumbs = list<NonNullable<VisualAi['thumbnails']>[number]>(parsed.thumbnails ?? (parsed as any).thumbs);
+  const palette = list<string>(parsed.palette).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
   const basePalette = PALETTES[project.style] ?? PALETTES.Cinematic;
   const finalPalette = palette.length >= 3 ? palette.slice(0, 3) : [...basePalette];
 
   const scenes: Scene[] = script.beats.map((beat, i) => {
-    const match = parsed.scenes?.find((s) => s.beatIndex === i) ?? parsed.scenes?.[i];
+    const match =
+      aiScenes.find((row) => Number((row as any).beatIndex) === i) ??
+      aiScenes[i] ??
+      {};
     return {
       id: uid('sc'),
       beatId: beat.id,
-      title: match?.title || beat.title,
-      prompt: match?.prompt || beat.bRollPrompt,
-      composition: match?.composition || 'cinematic medium shot, clean negative space',
+      title: text((match as any).title, beat.title),
+      prompt: text((match as any).prompt ?? (match as any).imagePrompt ?? (match as any).visual, beat.bRollPrompt),
+      composition: text((match as any).composition, 'cinematic medium shot, clean negative space'),
       durationSec: beat.durationSec,
-      transition: match?.transition || (i % 3 === 0 ? 'hard cut' : i % 3 === 1 ? 'slow crossfade' : 'whip pan'),
+      transition: text((match as any).transition, i % 3 === 0 ? 'hard cut' : i % 3 === 1 ? 'slow crossfade' : 'whip pan'),
       narration: beat.narration,
     };
   });
@@ -239,13 +300,13 @@ Exactly ${script.beats.length} scenes (one per beat, same order) and 4 thumbnail
     .slice(0, 2)
     .join('\n');
   const thumbnails: ThumbnailConcept[] = variants.map((variant, i) => {
-    const match = parsed.thumbnails?.find((t) => t.variant === variant) ?? parsed.thumbnails?.[i];
-    const thumbPalette = (match?.palette ?? []).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
+    const match = aiThumbs.find((t) => String(t.variant).toLowerCase() === variant) ?? aiThumbs[i] ?? {};
+    const thumbPalette = list<string>(match.palette).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
     return {
       id: uid('th'),
-      headline: (match?.headline || headlineFallback || 'THE\nSYSTEM').toUpperCase().slice(0, 28),
-      subline: (match?.subline || `${project.durationMin}-minute breakdown`).slice(0, 34),
-      composition: match?.composition || 'subject left, type right, dark vignette',
+      headline: (text(match.headline, headlineFallback || 'THE\nSYSTEM')).toUpperCase().slice(0, 28),
+      subline: text(match.subline, `${project.durationMin}-minute breakdown`).slice(0, 34),
+      composition: text(match.composition, 'subject left, type right, dark vignette'),
       palette: (thumbPalette.length >= 3 ? thumbPalette.slice(0, 3) : finalPalette) as [string, string, string],
       variant,
     };
@@ -253,7 +314,7 @@ Exactly ${script.beats.length} scenes (one per beat, same order) and 4 thumbnail
 
   return {
     palette: [...finalPalette, '#FFFFFF'],
-    style: parsed.style || `${project.style} · ${project.tone.toLowerCase()} tone`,
+    style: text(parsed.style, `${project.style} · ${project.tone.toLowerCase()} tone`),
     scenes,
     thumbnails,
     selectedThumbnailId: thumbnails[0].id,
@@ -332,40 +393,43 @@ Return STRICT JSON only:
 }
 Give 6 title variants including one that carries the exact keyword.`;
 
-  const text = await aiComplete(settings, {
+  const parsed = await aiJson<{
+    titles?: unknown;
+    alternativeTitles?: unknown;
+    description?: unknown;
+    tags?: unknown;
+    hashtags?: unknown;
+    searchIntent?: unknown;
+    ctrPrediction?: unknown;
+  }>(settings, {
     system: 'You are a YouTube SEO editor. Write for humans first, then for the algorithm. Reply with JSON only.',
     prompt,
     json: true,
-    maxTokens: 2000,
+    maxTokens: 3000,
   });
-  const parsed = parseJson<{
-    titles?: { text?: string; reason?: string }[];
-    description?: string;
-    tags?: string[];
-    hashtags?: string[];
-    searchIntent?: string;
-    ctrPrediction?: number;
-  }>(text);
 
-  const variants = (parsed.titles ?? [])
-    .filter((t) => t.text)
-    .map((t) => ({ text: String(t.text).trim(), ...scoreTitleLocal(String(t.text), research?.keyword ?? project.topic) }));
+  const variants = list<Record<string, unknown>>(parsed.titles ?? parsed.alternativeTitles)
+    .map((row) => {
+      const value = text(row.text ?? row.title ?? (typeof row === 'string' ? row : ''));
+      return value ? { text: value, ...scoreTitleLocal(value, research?.keyword ?? project.topic) } : null;
+    })
+    .filter((row): row is { text: string; score: number; reason: string } => Boolean(row));
   const selected = research?.selectedTitle ?? script.title;
   const allTitles = [{ text: selected, ...scoreTitleLocal(selected, research?.keyword ?? project.topic) }, ...variants]
     .filter((t, i, arr) => arr.findIndex((x) => x.text.toLowerCase() === t.text.toLowerCase()) === i)
     .sort((a, b) => b.score - a.score)
     .slice(0, 6);
 
-  const tags = (parsed.tags ?? [])
-    .map((t) => String(t).toLowerCase().replace(/^#/, '').trim())
+  const tags = tokens(parsed.tags)
+    .map((t) => t.toLowerCase().replace(/^#/, '').trim())
     .filter(Boolean)
     .slice(0, 15);
-  const hashtags = (parsed.hashtags ?? [])
-    .map((t) => String(t).replace(/^#/, '').trim())
+  const hashtags = tokens(parsed.hashtags)
+    .map((t) => t.replace(/^#/, '').trim())
     .filter(Boolean)
     .slice(0, 3);
   const chapters = chapterTimeline(script, selected);
-  const description = (parsed.description ?? '').trim();
+  const description = text(parsed.description);
   const descWithChapters = chapters.length > 1 && !/chapters/i.test(description)
     ? `${description}\n\nChapters\n${chapters.map((c) => `${c.time} ${c.label}`).join('\n')}`
     : description;
@@ -388,8 +452,8 @@ Give 6 title variants including one that carries the exact keyword.`;
     hashtags,
     score,
     breakdown,
-    searchIntent: parsed.searchIntent?.trim() || '',
-    ctrPrediction: clamp01(Number(parsed.ctrPrediction ?? 6), 1, 20),
+    searchIntent: text(parsed.searchIntent),
+    ctrPrediction: clamp01(Number(parsed.ctrPrediction ?? 6) || 6, 1, 20),
     generatedBy: requireProvider(settings).label,
   };
 }

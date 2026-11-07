@@ -72,14 +72,38 @@ async function openaiCompatible(provider: ProviderConfig, opts: CompleteOpts, si
       ],
     }),
   });
-  if (!res.ok) throw new Error(`${provider.label} ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const text = data.choices?.[0]?.message?.content;
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 300);
+    // Some OpenAI-compatible servers reject response_format; retry once without it.
+    if (opts.json && res.status === 400 && /response_format|json_object/i.test(detail)) {
+      return openaiCompatible(provider, { ...opts, json: false }, signal);
+    }
+    throw new Error(`${provider.label} ${res.status}: ${detail}`);
+  }
+  const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+  const choice = data.choices?.[0];
+  const text = choice?.message?.content;
+  if (choice?.finish_reason === 'length') {
+    throw new Error(`${provider.label} ran out of output tokens (max_tokens). Run the stage again or raise the model's output limit.`);
+  }
   if (!text) throw new Error(`${provider.label} returned an empty completion`);
   return text;
 }
 
+const isFlash = (model: string) => /flash/i.test(model);
+
 async function gemini(provider: ProviderConfig, opts: CompleteOpts, signal: AbortSignal): Promise<string> {
+  // Flash models spend the output budget on "thinking" and return cut-off JSON;
+  // Pro models cannot switch thinking off, so they keep their (larger) default.
+  return geminiCall(provider, opts, signal, isFlash(provider.model) ? 0 : undefined);
+}
+
+async function geminiCall(
+  provider: ProviderConfig,
+  opts: CompleteOpts,
+  signal: AbortSignal,
+  thinkingBudget?: number,
+): Promise<string> {
   const url = `${provider.baseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(provider.model)}:generateContent?key=${encodeURIComponent(provider.apiKey)}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -90,17 +114,40 @@ async function gemini(provider: ProviderConfig, opts: CompleteOpts, signal: Abor
       contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: opts.maxTokens ?? 4096,
+        maxOutputTokens: Math.max(opts.maxTokens ?? 4096, 2048),
         ...(opts.json ? { responseMimeType: 'application/json' } : {}),
+        // 2.5 Flash spends output budget on "thinking" and then returns cut-off JSON.
+        ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
       },
     }),
   });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: {
+      content?: { parts?: { text?: string; thought?: boolean }[] };
+      finishReason?: string;
+    }[];
+    promptFeedback?: { blockReason?: string };
   };
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('');
-  if (!text) throw new Error('Gemini returned an empty completion');
+  if (data.promptFeedback?.blockReason) {
+    throw new Error(`Gemini blocked this request (${data.promptFeedback.blockReason}). Try a different topic or reword the title.`);
+  }
+  const candidate = data.candidates?.[0];
+  const text = candidate?.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? '').join('');
+  if (!text) {
+    if (candidate?.finishReason === 'MAX_TOKENS' && thinkingBudget === undefined) {
+      // Retry with the smallest thinking budget the model allows.
+      return geminiCall(provider, opts, signal, isFlash(provider.model) ? 0 : 128);
+    }
+    throw new Error(
+      candidate?.finishReason
+        ? `Gemini stopped before writing an answer (${candidate.finishReason}). Try again, or pick a bigger model.`
+        : 'Gemini returned an empty completion. Try again.',
+    );
+  }
+  if (candidate?.finishReason === 'MAX_TOKENS') {
+    throw new Error('Gemini ran out of output tokens and the answer was cut off. Run the stage again, or switch to a model with a larger output limit.');
+  }
   return text;
 }
 
@@ -129,15 +176,49 @@ async function anthropic(provider: ProviderConfig, opts: CompleteOpts, signal: A
 
 /** Best-effort JSON extraction from a model response. */
 export function parseJson<T = Record<string, unknown>>(text: string): T {
-  const cleaned = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1)) as T;
-    throw new Error('Model response was not valid JSON');
+  const cleaned = text
+    .replace(/^\uFEFF/, '')
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  const candidates: string[] = [cleaned];
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1));
+  for (const candidate of candidates) {
+    for (const attempt of [candidate, candidate.replace(/,(\s*[}\]])/g, '$1')]) {
+      try {
+        return JSON.parse(attempt) as T;
+      } catch {
+        /* try the next shape */
+      }
+    }
   }
+  const snippet = cleaned.slice(0, 160).replace(/\s+/g, ' ');
+  throw new Error(`The model did not return usable JSON${snippet ? ` (it started with: "${snippet}…")` : ''}. Run the stage again.`);
+}
+
+/**
+ * JSON-only completion: one corrective retry when the model answers with prose,
+ * a truncated object or a fenced block that still will not parse.
+ */
+export async function aiJson<T>(settings: Settings, opts: CompleteOpts): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const prompt =
+      attempt === 0
+        ? opts.prompt
+        : `${opts.prompt}\n\nYour previous answer could not be parsed as JSON. Reply with ONE valid JSON object and nothing else — no prose, no markdown fences.`;
+    try {
+      const text = await aiComplete(settings, { ...opts, prompt });
+      return parseJson<T>(text);
+    } catch (err) {
+      lastError = err;
+      // Transport/auth/quota errors will not fix themselves on a retry.
+      if (err instanceof Error && !/JSON|parse|cut off|tokens/i.test(err.message)) throw err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('The model did not return usable JSON');
 }
 
 export async function testProvider(provider: ProviderConfig): Promise<{ ok: boolean; message: string; latencyMs: number }> {

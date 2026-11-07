@@ -28,7 +28,7 @@ import {
 import type { Project, StageId } from '../../shared/types';
 import { get, patch, post } from '../lib/api';
 import { useApi, useLive, useToast } from '../lib/context';
-import { copyText, clock, compact, dateLabel, download, scoreTone, stageLabels, stageOrder, timeAgo } from '../lib/format';
+import { copyText, clock, compact, dateLabel, download, downloadFile, scoreTone, stageLabels, stageOrder, timeAgo } from '../lib/format';
 import { Button, Card, CopyButton, Empty, KeyValue, Pill, ProgressBar, ScoreRing, StatusPill } from '../components/ui';
 import { ProductionTab } from './ProductionTab';
 
@@ -109,6 +109,19 @@ export function Workspace() {
       setDescDirty(false);
     }, 'Description saved');
   const selectThumbnail = (tid: string) => act('thumb', () => patch(`/projects/${project?.id}`, { selectedThumbnailId: tid }));
+  const downloadVideo = async () => {
+    if (!project) return;
+    try {
+      setBusy('download');
+      await downloadFile(`/api/projects/${project.id}/download`, `${(project.title || 'video').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.mp4`);
+      push('MP4 saved to your downloads', 'success');
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Download failed', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const exportPackage = () =>
     act('export', async () => {
       const res = await get<{ filename: string; markdown: string }>(`/projects/${project?.id}/export`);
@@ -188,9 +201,9 @@ export function Workspace() {
 
         <div className="page-actions">
           {project.production?.status === 'ready' && (
-            <a className="btn" href={`/api/projects/${project.id}/download`}>
-              <Download size={14} /> Download MP4
-            </a>
+            <Button icon={<Download size={14} />} onClick={downloadVideo} loading={busy === 'download'}>
+              Download MP4
+            </Button>
           )}
           <Button icon={<Download size={14} />} onClick={exportPackage} loading={busy === 'export'}>
             Export package
@@ -437,11 +450,11 @@ function StrategyTab({ project, onRegenerate, busy, onRun }: { project: Project;
             <div><div className="eyebrow" style={{ marginBottom: 4 }}>Hook</div><div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.6 }}>{s.hookAngle}</div></div>
             <div><div className="eyebrow" style={{ marginBottom: 4 }}>Target emotion</div><div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{s.targetEmotion}</div></div>
           </div>
-          {s.differentiators.length > 0 && (
+          {(s.differentiators ?? []).length > 0 && (
             <div>
               <div className="eyebrow" style={{ marginBottom: 6 }}>Why this one wins</div>
               <div className="stack" style={{ gap: 5 }}>
-                {s.differentiators.map((d) => (
+                {(s.differentiators ?? []).map((d) => (
                   <div key={d} className="row" style={{ gap: 7, fontSize: 12, color: 'var(--text-2)' }}><Check size={12} style={{ color: 'var(--green)' }} />{d}</div>
                 ))}
               </div>
@@ -450,11 +463,11 @@ function StrategyTab({ project, onRegenerate, busy, onRun }: { project: Project;
         </div>
       </Card>
 
-      <Card title="Outline" subtitle={`${s.outline.reduce((sum, o) => sum + o.durationSec, 0)} seconds planned`} bodyClass="tight">
+      <Card title="Outline" subtitle={`${(s.outline ?? []).reduce((sum, o) => sum + (Number.isFinite(o.durationSec) ? o.durationSec : 0), 0)} seconds planned`} bodyClass="tight">
         <table className="table">
           <thead><tr><th>#</th><th>Section</th><th>Purpose</th><th className="num">Time</th></tr></thead>
           <tbody>
-            {s.outline.map((o, i) => (
+            {(s.outline ?? []).map((o, i) => (
               <tr key={o.id}>
                 <td className="faint">{i + 1}</td>
                 <td style={{ fontWeight: 600 }}>{o.title}</td>

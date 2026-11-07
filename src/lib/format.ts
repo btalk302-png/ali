@@ -34,8 +34,8 @@ export function timeAgo(iso?: string | null) {
 }
 
 export function clock(seconds: number) {
-  const s = Math.max(0, Math.round(seconds));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const value = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
 }
 
 export const statusMeta: Record<ProjectStatus, { label: string; tone: string }> = {
@@ -74,6 +74,45 @@ export function download(filename: string, text: string, type = 'text/markdown')
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function filenameFromHeader(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf8) return decodeURIComponent(utf8[1].trim());
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  return plain?.[1]?.trim();
+}
+
+/**
+ * Downloads a server file through fetch + blob. This works from an iframe preview
+ * where window.open/_blank popups are blocked, and it surfaces the server's error
+ * message instead of saving a JSON error as "video.mp4".
+ */
+export async function downloadFile(url: string, fallbackName?: string): Promise<void> {
+  const res = await fetch(url, { credentials: 'same-origin' });
+  if (!res.ok) {
+    let message = `Download failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.error) message = body.error;
+    } catch {
+      /* not json */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error('The file is empty — render the video again.');
+  const name = fallbackName || filenameFromHeader(res.headers.get('content-disposition')) || 'video.mp4';
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 }
 
 export async function copyText(text: string) {

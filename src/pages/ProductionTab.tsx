@@ -23,7 +23,7 @@ import type { Project } from '../../shared/types';
 import { del, patch, post, put } from '../lib/api';
 import { useApi, useLive, useToast } from '../lib/context';
 import { Button, Card, Pill, ProgressBar, Empty } from '../components/ui';
-import { clock, timeAgo } from '../lib/format';
+import { clock, downloadFile, timeAgo } from '../lib/format';
 
 interface SceneMedia {
   id: string;
@@ -91,6 +91,7 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
   const [narrationDraft, setNarrationDraft] = useState('');
   const [durationDraft, setDurationDraft] = useState(6);
   const [dirty, setDirty] = useState(false);
+  const [playerFailed, setPlayerFailed] = useState(false);
 
   const scenes = data?.scenes ?? [];
   const current = scenes.find((s) => s.id === selected) ?? scenes[0];
@@ -98,6 +99,10 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
   const ready = production?.status === 'ready' && Boolean(data?.videoUrl);
   const job = data?.job ?? undefined;
   const rendering = job?.status === 'running' || production?.status === 'running';
+
+  useEffect(() => {
+    setPlayerFailed(false);
+  }, [data?.videoUrl]);
 
   useEffect(() => {
     if (!current) return;
@@ -181,6 +186,17 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
       setSelected(res.scene.id);
     }, 'Scene added');
 
+  const download = () =>
+    act(
+      'download',
+      async () => {
+        if (!data?.downloadUrl) throw new Error('Render the video first — there is no MP4 on disk yet.');
+        const name = `${project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'video'}.mp4`;
+        await downloadFile(data.downloadUrl, name);
+      },
+      'MP4 saved to your downloads',
+    );
+
   async function setOverride(patchBody: Record<string, unknown>) {
     await act('override', () => put(`/projects/${project.id}/media/settings`, patchBody));
   }
@@ -239,21 +255,34 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
           <Button icon={<ImageIcon size={14} />} onClick={generateImages} loading={busy === 'images'} disabled={rendering}>
             Generate visuals
           </Button>
-          <Button icon={<Mic size={14} />} onClick={generateVoice} loading={busy === 'voice'} disabled={rendering || !config?.tts.resolved}>
+          <Button
+            icon={<Mic size={14} />}
+            onClick={generateVoice}
+            loading={busy === 'voice'}
+            disabled={rendering || !config?.tts.resolved}
+            title={config?.tts.resolved ? 'Generate narration for every scene' : 'Add a Google AI Studio (free) or OpenAI key to enable narration'}
+          >
             Generate voiceover
           </Button>
-          <Button variant="primary" icon={<Play size={14} />} onClick={render} loading={busy === 'render'} disabled={rendering || !config?.ffmpeg.available}>
+          <Button
+            variant="primary"
+            icon={<Play size={14} />}
+            onClick={render}
+            loading={busy === 'render'}
+            disabled={rendering || !config?.ffmpeg.available || scenes.length === 0}
+            title={scenes.length === 0 ? 'Run the visuals stage first — there are no scenes to render' : 'Render every scene into one MP4'}
+          >
             {ready ? 'Re-render video' : 'Render video'}
           </Button>
-          {ready && (
-            <Button icon={<Download size={14} />} onClick={() => window.open(data?.downloadUrl, '_blank')}>
+          {ready && data?.downloadUrl && (
+            <Button icon={<Download size={14} />} onClick={download} loading={busy === 'download'}>
               Download MP4
             </Button>
           )}
           {ready && data?.captionsUrl && (
-            <Button variant="ghost" onClick={() => window.open(data?.captionsUrl, '_blank')}>
+            <a className="btn btn-ghost" href={data.captionsUrl} download={`${project.id}.srt`}>
               .srt captions
-            </Button>
+            </a>
           )}
         </div>
 
@@ -270,9 +299,14 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
           </div>
         )}
         {production?.status === 'failed' && production.error && (
-          <div className="notice" style={{ marginTop: 12 }}>
+          <div className="notice" style={{ marginTop: 12, alignItems: 'flex-start' }}>
             <Info size={15} />
-            <div>{production.error}</div>
+            <div style={{ flex: 1 }}>
+              <b>Render failed.</b> {production.error}
+            </div>
+            <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={render} loading={busy === 'render'}>
+              Retry
+            </Button>
           </div>
         )}
       </Card>
@@ -285,16 +319,38 @@ export function ProductionTab({ project, onProjectReload }: { project: Project; 
       >
         {ready && data?.videoUrl ? (
           <div className="stack" style={{ gap: 10 }}>
+            {playerFailed && (
+              <div className="notice" style={{ marginBottom: 10 }}>
+                <Info size={15} />
+                <div style={{ flex: 1 }}>
+                  The browser could not play this file inline. It is still a valid MP4 on disk — use{' '}
+                  <b>Download</b> or <a href={data.videoUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>open it in a new tab</a>.
+                </div>
+              </div>
+            )}
             <div className="video-shell">
-              <video key={data.videoUrl} src={data.videoUrl} poster={data.posterUrl} controls preload="metadata" playsInline />
+              <video
+                key={data.videoUrl}
+                src={data.videoUrl}
+                poster={data.posterUrl}
+                controls
+                preload="metadata"
+                playsInline
+                onError={() => setPlayerFailed(true)}
+              />
             </div>
             <div className="row wrap" style={{ gap: 8 }}>
-              <Button size="sm" icon={<Download size={13} />} onClick={() => window.open(data.downloadUrl, '_blank')}>
+              <Button size="sm" icon={<Download size={13} />} onClick={download} loading={busy === 'download'}>
                 Download {project.format === 'short' ? 'short' : 'MP4'}
               </Button>
-              <Button size="sm" variant="ghost" icon={<ExternalLink size={13} />} onClick={() => window.open(data.videoUrl, '_blank')}>
-                Open in browser
-              </Button>
+              <a className="btn btn-sm btn-ghost" href={data.videoUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} /> Open in browser
+              </a>
+              {data.downloadUrl && (
+                <a className="btn btn-sm btn-ghost" href={data.downloadUrl} download>
+                  Direct link
+                </a>
+              )}
               <span className="faint" style={{ fontSize: 11 }}>
                 {production?.aspect} · H.264 + AAC · narration: {production?.withNarration ? 'included' : 'silent (no key)'}
               </span>

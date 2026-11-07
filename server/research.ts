@@ -1,5 +1,5 @@
 import type { Research, ResearchSource, ResearchVideo, Settings, TitleCandidate } from '../shared/types.js';
-import { aiComplete, parseJson } from './ai.js';
+import { aiJson } from './ai.js';
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -295,39 +295,47 @@ Return STRICT JSON only:
 }
 Give exactly 8 titles. They must fit this channel: ${settings.channel.niche}. Audience: ${settings.channel.audience}. Tone: ${settings.brand.tone}. Avoid these words: ${settings.brand.bannedWords.join(', ')}.`;
 
-  const text = await aiComplete(settings, {
+  const parsed = await aiJson<{
+    summary?: unknown;
+    insights?: unknown;
+    opportunities?: unknown;
+    titles?: unknown;
+    angles?: unknown;
+  }>(settings, {
     system: 'Evidence-first YouTube researcher. You never fabricate data. Reply with JSON only.',
     prompt,
     json: true,
-    maxTokens: 2200,
+    maxTokens: 3600,
   });
-  const parsed = parseJson<{
-    summary?: string;
-    insights?: string[];
-    opportunities?: { title?: string; why?: string; searchInterest?: number; competition?: 'low' | 'medium' | 'high' }[];
-    titles?: { text?: string; angle?: string; why?: string; score?: number }[];
-  }>(text);
+
+  const rows = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+  const str = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : fallback);
 
   return {
-    summary: parsed.summary ?? '',
-    insights: (parsed.insights ?? []).filter(Boolean).slice(0, 6),
-    opportunities: (parsed.opportunities ?? [])
-      .filter((o) => o.title)
+    summary: str(parsed.summary),
+    insights: rows<unknown>(parsed.insights)
+      .map((item) => str(typeof item === 'string' ? item : (item as any)?.insight ?? (item as any)?.text))
+      .filter(Boolean)
+      .slice(0, 6),
+    opportunities: rows<Record<string, unknown>>(parsed.opportunities ?? parsed.angles)
       .map((o) => ({
-        title: String(o.title),
-        why: String(o.why ?? ''),
-        searchInterest: Math.max(0, Math.min(100, Number(o.searchInterest ?? 50))),
-        competition: o.competition ?? 'medium',
-      })),
-    aiTitles: (parsed.titles ?? [])
-      .filter((t) => t.text)
+        title: str(o.title ?? o.angle),
+        why: str(o.why ?? o.reason),
+        searchInterest: Math.max(0, Math.min(100, Number(o.searchInterest ?? 50) || 50)),
+        competition: (['low', 'medium', 'high'] as const).includes(str(o.competition).toLowerCase() as any)
+          ? (str(o.competition).toLowerCase() as 'low' | 'medium' | 'high')
+          : 'medium',
+      }))
+      .filter((o) => o.title.length > 0),
+    aiTitles: rows<Record<string, unknown>>(parsed.titles)
       .map((t) => ({
-        text: String(t.text).slice(0, 120),
-        angle: String(t.angle ?? 'AI'),
-        why: String(t.why ?? ''),
-        score: Math.max(0, Math.min(100, Number(t.score ?? 70))),
+        text: str(t.text ?? t.title).slice(0, 120),
+        angle: str(t.angle, 'AI'),
+        why: str(t.why ?? t.reason),
+        score: Math.max(0, Math.min(100, Number(t.score ?? 70) || 70)),
         source: 'ai' as const,
-      })),
+      }))
+      .filter((t) => t.text.length > 0),
     provider: provider.label,
   };
 }
