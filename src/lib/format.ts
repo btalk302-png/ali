@@ -6,14 +6,6 @@ const NUM = new Intl.NumberFormat('en');
 export const n = (v: number | null | undefined) => NUM.format(Math.round(Number(v ?? 0)));
 export const compact = (v: number | null | undefined) => COMPACT.format(Number(v ?? 0));
 
-export function percent(v: number | null | undefined, digits = 1) {
-  return `${Number(v ?? 0).toFixed(digits)}%`;
-}
-
-export function money(v: number | null | undefined) {
-  return `$${Number(v ?? 0).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 export function dateLabel(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -50,23 +42,21 @@ export const statusMeta: Record<ProjectStatus, { label: string; tone: string }> 
   draft: { label: 'Draft', tone: 'pill-neutral' },
   generating: { label: 'Generating', tone: 'pill-violet' },
   review: { label: 'Needs review', tone: 'pill-amber' },
-  approved: { label: 'Approved', tone: 'pill-cyan' },
-  scheduled: { label: 'Scheduled', tone: 'pill-green' },
-  published: { label: 'Published', tone: 'pill-green' },
+  ready: { label: 'Ready', tone: 'pill-green' },
   failed: { label: 'Failed', tone: 'pill-red' },
 };
 
 export const stageLabels: Record<StageId, string> = {
-  research: 'Research',
+  research: 'Title research',
   strategy: 'Strategy',
   script: 'Script',
   visuals: 'Visuals',
   seo: 'SEO',
-  quality: 'QA gate',
-  release: 'Release',
+  quality: 'Quality',
+  export: 'Export',
 };
 
-export const stageOrder: StageId[] = ['research', 'strategy', 'script', 'visuals', 'seo', 'quality', 'release'];
+export const stageOrder: StageId[] = ['research', 'strategy', 'script', 'visuals', 'seo', 'quality', 'export'];
 
 export function scoreTone(score: number | null | undefined) {
   const v = score ?? 0;
@@ -74,30 +64,6 @@ export function scoreTone(score: number | null | undefined) {
   if (v >= 70) return 'var(--cyan)';
   if (v >= 55) return 'var(--amber)';
   return 'var(--red)';
-}
-
-export function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-}
-
-export function avatarColor(hue: number) {
-  return `linear-gradient(140deg, hsl(${hue} 55% 46%), hsl(${(hue + 40) % 360} 60% 30%))`;
-}
-
-export function copyText(text: string) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
-  const el = document.createElement('textarea');
-  el.value = text;
-  document.body.appendChild(el);
-  el.select();
-  document.execCommand('copy');
-  el.remove();
-  return Promise.resolve();
 }
 
 export function download(filename: string, text: string, type = 'text/markdown') {
@@ -108,4 +74,13 @@ export function download(filename: string, text: string, type = 'text/markdown')
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }

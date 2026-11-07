@@ -1,8 +1,28 @@
 import type { ProviderConfig, Settings } from '../shared/types.js';
 
+const ENV_KEYS: Record<string, string | undefined> = {
+  gemini: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
+  openai: process.env.OPENAI_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+  deepseek: process.env.DEEPSEEK_API_KEY,
+  anthropic: process.env.ANTHROPIC_API_KEY,
+};
+
+export function resolveKey(provider: ProviderConfig): string {
+  return provider.apiKey.trim() || (ENV_KEYS[provider.id] ?? '').trim();
+}
+
 export function activeProvider(settings: Settings): ProviderConfig | undefined {
-  if (settings.demoMode) return undefined;
-  return settings.providers.find((p) => p.enabled && p.apiKey.trim().length > 8 && p.kind === 'text');
+  const provider = settings.providers.find((p) => p.enabled && resolveKey(p).length > 8 && p.kind === 'text');
+  return provider ? { ...provider, apiKey: resolveKey(provider) } : undefined;
+}
+
+export function requireProvider(settings: Settings): ProviderConfig {
+  const provider = activeProvider(settings);
+  if (!provider) {
+    throw new Error('No AI key configured. Add a Gemini, OpenAI or other provider key in Settings → AI providers, then run the stage again.');
+  }
+  return provider;
 }
 
 export function isLive(settings: Settings): boolean {
@@ -123,7 +143,6 @@ export function parseJson<T = Record<string, unknown>>(text: string): T {
 export async function testProvider(provider: ProviderConfig): Promise<{ ok: boolean; message: string; latencyMs: number }> {
   const started = Date.now();
   const settings = {
-    demoMode: false,
     providers: [{ ...provider, enabled: true }],
   } as unknown as Settings;
   try {

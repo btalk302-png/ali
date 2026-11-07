@@ -1,13 +1,6 @@
-export type StageId = 'research' | 'strategy' | 'script' | 'visuals' | 'seo' | 'quality' | 'release';
+export type StageId = 'research' | 'strategy' | 'script' | 'visuals' | 'seo' | 'quality' | 'export';
 export type StageStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
-export type ProjectStatus =
-  | 'draft'
-  | 'generating'
-  | 'review'
-  | 'approved'
-  | 'scheduled'
-  | 'published'
-  | 'failed';
+export type ProjectStatus = 'draft' | 'generating' | 'review' | 'ready' | 'failed';
 
 export interface StageState {
   id: StageId;
@@ -17,36 +10,55 @@ export interface StageState {
   message?: string;
 }
 
-export interface TrendingAngle {
+/* ------------------------------------------------------------------ research */
+
+export interface ResearchVideo {
+  videoId: string;
+  title: string;
+  channel: string;
+  views: number;
+  publishedAt: string;
+  durationSec?: number;
+  url: string;
+  outlier?: boolean;
+}
+
+export interface ResearchSource {
+  label: string;
+  url: string;
+  kind: 'youtube' | 'wikipedia' | 'web';
+}
+
+export interface TitleCandidate {
+  text: string;
+  angle: string;
+  why: string;
+  score: number;
+  source: 'pattern' | 'ai';
+}
+
+export interface ResearchOpportunity {
   title: string;
   why: string;
   searchInterest: number;
   competition: 'low' | 'medium' | 'high';
 }
 
-export interface Competitor {
-  channel: string;
-  subscribers: string;
-  avgViews: string;
-  pattern: string;
-}
-
-export interface KeywordCluster {
-  keyword: string;
-  volume: number;
-  difficulty: number;
-  intent: 'informational' | 'commercial' | 'entertainment';
-}
-
 export interface Research {
+  keyword: string;
+  queries: string[];
   summary: string;
-  audienceInsights: string[];
-  trendingAngles: TrendingAngle[];
-  competitors: Competitor[];
-  keywordClusters: KeywordCluster[];
-  sources: { label: string; url: string }[];
-  generatedBy: string;
+  videos: ResearchVideo[];
+  sources: ResearchSource[];
+  insights: string[];
+  opportunities: ResearchOpportunity[];
+  titles: TitleCandidate[];
+  selectedTitle?: string;
+  providers: string[];
+  generatedAt: string;
 }
+
+/* ------------------------------------------------------------------ strategy */
 
 export interface Strategy {
   bigIdea: string;
@@ -55,8 +67,10 @@ export interface Strategy {
   differentiators: string[];
   outline: { id: string; title: string; purpose: string; durationSec: number }[];
   cta: string;
-  publishSlot: string;
+  generatedAt: string;
 }
+
+/* ------------------------------------------------------------------ script */
 
 export interface Beat {
   id: string;
@@ -80,6 +94,8 @@ export interface Script {
   fullText: string;
   generatedBy: string;
 }
+
+/* ------------------------------------------------------------------ visuals */
 
 export interface SceneImage {
   status: 'pending' | 'ready' | 'error';
@@ -132,6 +148,8 @@ export interface Visuals {
   generatedBy: string;
 }
 
+/* ------------------------------------------------------------------ seo */
+
 export interface TitleVariant {
   text: string;
   score: number;
@@ -159,6 +177,8 @@ export interface Seo {
   generatedBy: string;
 }
 
+/* ------------------------------------------------------------------ quality */
+
 export interface QualityCheck {
   id: string;
   label: string;
@@ -174,27 +194,7 @@ export interface Quality {
   reviewedAt: string;
 }
 
-export interface Metrics {
-  views: number;
-  watchHours: number;
-  subscribers: number;
-  ctr: number;
-  avd: string;
-  likes: number;
-  comments: number;
-  revenue: number;
-  retention: number[];
-  daily: { date: string; views: number; subs: number }[];
-}
-
-export interface Schedule {
-  publishAt: string;
-  privacy: 'public' | 'unlisted' | 'private';
-  status: 'draft' | 'queued' | 'published';
-  timezone: string;
-  publishedAt?: string;
-  youtubeId?: string;
-}
+/* ------------------------------------------------------------------ production */
 
 export interface Production {
   status: 'idle' | 'running' | 'ready' | 'failed';
@@ -237,17 +237,13 @@ export interface Project {
   visuals?: Visuals;
   seo?: Seo;
   quality?: Quality;
-  schedule?: Schedule;
-  metrics?: Metrics;
-  approvedAt?: string;
-  publishedAt?: string;
-  rejectionNote?: string;
   createdAt: string;
   updatedAt: string;
-  engine: 'demo' | 'live';
   media?: ProjectMediaSettings;
   production?: Production;
 }
+
+/* ------------------------------------------------------------------ jobs */
 
 export interface JobLog {
   t: string;
@@ -258,7 +254,7 @@ export interface JobLog {
 export interface Job {
   id: string;
   projectId?: string;
-  kind: 'pipeline' | 'autopilot' | 'analytics' | 'engagement' | 'media';
+  kind: 'pipeline' | 'media' | 'research';
   status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
   progress: number;
   currentStage?: string;
@@ -269,56 +265,7 @@ export interface Job {
   endedAt?: string;
 }
 
-export interface Comment {
-  id: string;
-  projectId: string;
-  author: string;
-  avatarHue: number;
-  text: string;
-  likes: number;
-  sentiment: 'positive' | 'neutral' | 'negative';
-  theme: string;
-  isQuestion: boolean;
-  spam: boolean;
-  replied: boolean;
-  replyDraft?: string;
-  postedAt: string;
-}
-
-export interface Recommendation {
-  id: string;
-  title: string;
-  insight: string;
-  evidence: string;
-  impact: 'high' | 'medium' | 'low';
-  category: 'format' | 'hook' | 'thumbnail' | 'seo' | 'cadence' | 'audience';
-  status: 'pending' | 'approved' | 'rejected';
-  createdAt: string;
-}
-
-export interface Experiment {
-  id: string;
-  projectId: string;
-  kind: 'title' | 'thumbnail';
-  variantA: string;
-  variantB: string;
-  impressionsA: number;
-  impressionsB: number;
-  ctrA: number;
-  ctrB: number;
-  confidence: number;
-  status: 'running' | 'winner' | 'inconclusive';
-  startedAt: string;
-}
-
-export interface ActivityItem {
-  id: string;
-  projectId?: string;
-  icon: string;
-  text: string;
-  meta?: string;
-  createdAt: string;
-}
+/* ------------------------------------------------------------------ settings */
 
 export interface ProviderConfig {
   id: string;
@@ -327,7 +274,7 @@ export interface ProviderConfig {
   model: string;
   apiKey: string;
   enabled: boolean;
-  kind: 'text' | 'image';
+  kind: 'text';
 }
 
 export interface MediaSettings {
@@ -363,27 +310,29 @@ export interface Settings {
     keywords: string[];
     bannedWords: string[];
   };
-  automation: {
-    enabled: boolean;
-    cadence: 'daily' | '3-per-week' | 'weekly';
-    publishHour: number;
-    privacy: 'public' | 'unlisted' | 'private';
-    autoApprove: boolean;
-    pillars: string[];
-    mandate: string;
-    guardrails: string;
+  research: {
+    youtubeApiKey: string;
+    region: string;
+    language: string;
+    resultLimit: number;
   };
   providers: ProviderConfig[];
   media: MediaSettings;
-  demoMode: boolean;
+}
+
+export interface ActivityItem {
+  id: string;
+  icon: string;
+  text: string;
+  meta?: string;
+  projectId?: string;
+  at: string;
 }
 
 export interface Db {
+  version: number;
+  settings: Settings;
   projects: Project[];
   jobs: Job[];
-  comments: Comment[];
-  recommendations: Recommendation[];
-  experiments: Experiment[];
   activity: ActivityItem[];
-  settings: Settings;
 }

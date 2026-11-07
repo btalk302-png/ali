@@ -90,9 +90,9 @@ const checks: [string, boolean][] = [
   ['clip audio player', (container.querySelectorAll('audio').length >= 1)],
   ['regenerate buttons', text.includes('New visual from prompt') && text.includes('Re-voice')],
 ];
-for (const [name, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`);
 // ---------------------------------------------------------------- settings page
-const storeSettings = (await import('../data/store.json', { with: { type: 'json' } })).default.settings;
+const { DEFAULT_SETTINGS } = await import('../server/defaults.ts');
+const storeSettings = structuredClone(DEFAULT_SETTINGS);
 g.fetch = async (input: any) => {
   const url = String(input);
   const body = url.includes('/media/config') ? configFixture : url.includes('/settings') ? { settings: storeSettings } : { error: 'not found' };
@@ -123,6 +123,185 @@ const settingsChecks: [string, boolean][] = [
 for (const [name, ok] of settingsChecks) console.log(`${ok ? 'PASS' : 'FAIL'} settings: ${name}`);
 checks.push(...settingsChecks);
 
+
+// ---------------------------------------------------------------- title research page
+const researchFixture = {
+  keyword: 'youtube retention',
+  queries: ['youtube retention'],
+  summary: 'Most videos explain retention tactics without sequencing. The gap is a measurable checkpoint system.',
+  videos: [
+    { videoId: 'abc123', title: 'Why retention dies at 30 seconds', channel: 'Creator Lab', views: 184200, publishedAt: '2025-06-01T00:00:00Z', url: 'https://youtube.com/watch?v=abc123', outlier: true },
+    { videoId: 'def456', title: 'The retention curve explained', channel: 'Edit Better', views: 92100, publishedAt: '2025-08-11T00:00:00Z', url: 'https://youtube.com/watch?v=def456' },
+  ],
+  sources: [
+    { label: 'YouTube search — youtube retention', url: 'https://youtube.com/results?search_query=youtube+retention', kind: 'youtube' },
+    { label: 'Wikipedia — Audience retention', url: 'https://en.wikipedia.org/wiki/Audience_retention', kind: 'wikipedia' },
+    { label: 'Creator Lab — retention study', url: 'https://example.com/study', kind: 'web' },
+  ],
+  insights: ['Numbered titles outperform in this set.', 'Nobody names the first 30 seconds.'],
+  opportunities: [{ title: 'Fix the first 30 seconds', why: 'Underserved angle', searchInterest: 72, competition: 'low' }],
+  titles: [
+    { text: 'Why Your Retention Dies at 30 Seconds', angle: 'Problem', why: 'names the failure moment', score: 91, source: 'ai' },
+    { text: '3 Retention Checkpoints That Actually Work', angle: 'List', why: 'concrete number', score: 84, source: 'pattern' },
+  ],
+  selectedTitle: 'Why Your Retention Dies at 30 Seconds',
+  providers: ['YouTube Data API', 'OpenAI'],
+  generatedAt: new Date().toISOString(),
+};
+
+const bootstrapFixture = {
+  channel: { name: 'The Signal Lab', handle: '@thesignallab', niche: 'creator systems' },
+  brand: { voice: 'calm', tone: 'Analytical' },
+  settings: { status: { textProvider: 'OpenAI', youtube: true, ffmpeg: true, imageProvider: 'pollinations', ttsProvider: 'gemini', ready: true } },
+  counts: { projects: 1, running: 0, ready: 1, rendered: 0 },
+  activity: [],
+};
+
+g.fetch = async (input: any) => {
+  const url = String(input);
+  const body = url.includes('/media/config')
+    ? configFixture
+    : url.includes('/bootstrap')
+      ? bootstrapFixture
+      : /\/api\/research$/.test(url)
+        ? { research: researchFixture }
+        : { error: 'not found' };
+  return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body };
+};
+
+const { TitleResearch } = await import('../src/pages/TitleResearch');
+const container3 = dom.window.document.createElement('div');
+dom.window.document.body.appendChild(container3);
+const root3 = createRoot(container3);
+await act(async () => {
+  root3.render(React.createElement(MemoryRouter, null, React.createElement(ToastProvider, null, React.createElement(LiveProvider, null, React.createElement(TitleResearch)))));
+});
+await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+const searchInput = container3.querySelector('input.input') as any;
+const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+await act(async () => {
+  setter.call(searchInput, 'youtube retention');
+  searchInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+});
+const researchBtn = Array.from(container3.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Research titles')) as any;
+await act(async () => {
+  researchBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 300));
+});
+const researchText = container3.textContent || '';
+checks.push(
+  ['research: input + action', Boolean(searchInput) && Boolean(researchBtn)],
+  ['research: results render', researchText.includes('Opportunity read') && researchText.includes('Title options')],
+  ['research: real video row', researchText.includes('Why retention dies at 30 seconds')],
+  ['research: create project cta', researchText.includes('Create project')],
+);
+
+// ---------------------------------------------------------------- workspace
+const now = new Date().toISOString();
+const workspaceFixture = {
+  project: {
+    id: 'prj_test',
+    title: 'Why Your Retention Dies at 30 Seconds',
+    topic: 'youtube retention',
+    niche: 'creator systems',
+    audience: 'solo creators',
+    tone: 'Analytical',
+    format: 'long',
+    durationMin: 8,
+    style: 'Cinematic',
+    language: 'English',
+    status: 'review',
+    stages: Object.fromEntries(['research', 'strategy', 'script', 'visuals', 'seo', 'quality', 'export'].map((s) => [s, { id: s, status: 'done' }])),
+    research: researchFixture,
+    strategy: {
+      bigIdea: 'Retention is a sequencing problem.',
+      hookAngle: 'Open on the exact second viewers leave.',
+      targetEmotion: 'relief',
+      differentiators: ['shows the curve', 'gives checkpoints'],
+      outline: [{ id: 'o1', title: 'The cliff', purpose: 'show the drop', durationSec: 90 }, { id: 'o2', title: 'The fix', purpose: 'teach it', durationSec: 150 }],
+      cta: 'Download the sheet.',
+      generatedAt: now,
+    },
+    script: {
+      title: 'Why Your Retention Dies at 30 Seconds',
+      hook: 'Your retention problem starts in the first sentence.',
+      intro: 'I looked at a hundred curves.',
+      beats: [
+        { id: 'b1', title: 'The cliff', narration: 'Most creators blame the edit. The real cause is order.', bRollPrompt: 'retention curve', durationSec: 90 },
+        { id: 'b2', title: 'The fix', narration: 'Name the cost, then the cause, then the proof.', bRollPrompt: 'script edits', durationSec: 150 },
+      ],
+      outro: 'Retention is designed before you record.',
+      cta: 'Download the sheet.',
+      wordCount: 420,
+      wpm: 150,
+      estimatedDurationSec: 480,
+      fullText: 'Your retention problem starts in the first sentence.',
+      generatedBy: 'OpenAI',
+    },
+    visuals: { palette: ['#0A0D16', '#5B4BDB', '#F5B544', '#fff'], style: 'Dark editorial', scenes: mediaFixture.scenes.map((sc: any) => ({ ...sc, prompt: sc.prompt ?? 'scene', composition: 'center', transition: 'cut' })), thumbnails: [], selectedThumbnailId: undefined, generatedBy: 'OpenAI' },
+    seo: {
+      titles: [{ text: 'Why Your Retention Dies at 30 Seconds', score: 88, reason: 'ideal length' }],
+      selectedTitle: 'Why Your Retention Dies at 30 Seconds',
+      description: 'Description text.',
+      chapters: [{ time: '00:00', label: 'Intro' }],
+      tags: ['retention', 'youtube'],
+      hashtags: ['youtube'],
+      score: 77,
+      breakdown: [{ label: 'Title', score: 18, max: 20, note: 'good' }],
+      searchIntent: 'fix retention',
+      ctrPrediction: 7.4,
+      generatedBy: 'OpenAI',
+    },
+    quality: { score: 82, checks: [{ id: 'q1', label: 'Research evidence attached', status: 'pass', detail: '4 sources' }], blockers: [], reviewedAt: now },
+    createdAt: now,
+    updatedAt: now,
+  },
+  job: null,
+  summary: { stageProgress: 100, quality: 82, runtime: '8:00', runtimeSec: 480, scenes: 2, titles: 2, videos: 2, production: 'idle' },
+};
+
+g.fetch = async (input: any) => {
+  const url = String(input);
+  const body = url.match(/\/api\/projects\/prj_test$/)
+    ? workspaceFixture
+    : url.includes('/media/config')
+      ? configFixture
+      : url.includes('/bootstrap')
+        ? bootstrapFixture
+        : { error: 'not found' };
+  return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body };
+};
+
+const { Workspace } = await import('../src/pages/Workspace');
+const { Routes, Route } = await import('react-router-dom');
+const container4 = dom.window.document.createElement('div');
+dom.window.document.body.appendChild(container4);
+const root4 = createRoot(container4);
+await act(async () => {
+  root4.render(
+    React.createElement(MemoryRouter, { initialEntries: ['/projects/prj_test'] },
+      React.createElement(ToastProvider, null,
+        React.createElement(LiveProvider, null,
+          React.createElement(Routes, null,
+            React.createElement(Route, { path: '/projects/:id', element: React.createElement(Workspace) }))))),
+  );
+});
+await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+const workspaceText = container4.textContent || '';
+const scriptTab = Array.from(container4.querySelectorAll('button.tab')).find((b) => (b.textContent || '').includes('Script')) as any;
+await act(async () => {
+  scriptTab?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+});
+const scriptText = container4.textContent || '';
+checks.push(
+  ['workspace: title + stages', workspaceText.includes('Why Your Retention Dies at 30 Seconds') && Boolean(container4.querySelectorAll('.stage-node').length >= 7)],
+  ['workspace: research tab', workspaceText.includes('Opportunity read')],
+  ['workspace: stage tabs', Boolean(scriptTab)],
+  ['workspace: script tab content', scriptText.includes('The cliff') && scriptText.includes('Copy script')],
+);
+
+for (const [name, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`);
 const failed = checks.filter(([, ok]) => !ok).length;
-console.log(failed === 0 ? '\nUI SMOKE OK' : `\n${failed} CHECK(S) FAILED`);
+console.log(failed === 0 ? '\nUI SMOKE OK (' + checks.length + ' checks)' : `\n${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

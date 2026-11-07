@@ -1,6 +1,8 @@
 # Analysis — `darkzOGx/youtube-automation-agent` aur us se bana premium tool
 
-> Ye document do hisson mein hai: pehle reference repo ka full technical + product analysis, phir us analysis se nikle decisions jo **CreatorPilot Studio** mein implement kiye gaye.
+> Ye document do hisson mein hai: pehle reference repo ka full technical + product analysis, phir us analysis se nikle decisions jo **CreatorPilot** mein implement kiye gaye.
+>
+> **Scope update (final build):** product ab jaan bujh kar chhota hai — sirf ek honest pipeline. Google login/email signup, demo engine, command center, analytics dashboard, audience studio, learning loop, autopilot aur simulated publishing **hata diye gaye** hain. Jo bacha hai: real title research (YouTube Data API + Wikipedia + Gemini grounding) → strategy → script → visuals → SEO → quality checks → images/voice/MP4 export aur clip-level editing. Har stage live model se chalta hai; key na ho to saaf error deta hai, jhooti content nahi banata.
 
 ---
 
@@ -170,19 +172,19 @@ index.js (Express server + scheduler + orchestration + all API routes)
 
 | Capability | Reference | CreatorPilot |
 | --- | --- | --- |
-| Research / strategy | ✅ AI + trends | ✅ AI + structured angles + fallback |
+| Research / strategy | ✅ AI + trends | ✅ real YouTube data + patterns + grounded synthesis (no fallback filler) |
 | Script | ✅ beats | ✅ beats + word/time math + inline editing |
 | Thumbnails | ✅ AI/gradient placeholder | ✅ vector art director, 4 layouts, SVG export |
 | SEO | ✅ titles/tags/chapters | ✅ 6 scored variants + breakdown + CTR prediction |
 | Quality gates | ✅ extensive | ✅ 10 checks + 2 attestations + blockers |
 | Production | ✅ real MP4 (FFmpeg/Playwright) | ✅ real MP4 (bundled ffmpeg) + per-scene images + narration + timeline editor |
-| Publishing | ✅ YouTube API upload | ⚠️ dry-run queue (OAuth pending) |
-| Analytics | ✅ YouTube APIs | ✅ simulated series + retention curve |
-| Learning loop | ✅ | ✅ with approvals + A/B experiments |
-| Audience engagement | ✅ | ✅ triage, drafts, ideas |
-| Autopilot | ✅ operator | ✅ mandate/pillars/cadence + run now |
+| Publishing | ✅ YouTube API upload | ⚠️ intentionally removed — export MP4 + package, upload by hand |
+| Analytics | ✅ YouTube APIs | ❌ removed by design — no fake metrics |
+| Learning loop | ✅ | ❌ removed — single-pipeline tool |
+| Audience engagement | ✅ | ❌ removed — out of scope |
+| Autopilot | ✅ operator | ❌ removed — manual projects only |
 | Resumable stages | ✅ | ✅ per-stage checkpoint + invalidation |
-| Multi-provider | ✅ 8 text / 5 video | ✅ 5 text adapters + fallback |
+| Multi-provider | ✅ 8 text / 5 video | ✅ 5 text adapters (Gemini first), no silent fallback |
 | UI | Functional | Premium design system, dark/light, responsive |
 | Mobile | Ad-hoc | Responsive down to 360 px |
 
@@ -192,10 +194,11 @@ Legend: ✅ shipped · ⚠️ intentionally scoped out (documented, not faked).
 
 ## 10. CreatorPilot ka technical shape
 
-- **Backend:** Express + TypeScript, 30+ JSON endpoints, SSE stream, atomic JSON store (`data/store.json`), demo seed.
-- **Pipeline:** 7 stages, job logs, progress events, stage-level invalidation, graceful live→demo fallback, quality re-scoring.
-- **Content engine:** deterministic but topic-aware research, strategy, script templates with word budgets, SEO scoring, quality checks.
-- **AI:** OpenAI-compatible + Gemini + Anthropic adapters; JSON mode; strict prompts; parse + validate; fallback.
+- **Backend:** Express + TypeScript, ~25 JSON endpoints, SSE stream, atomic JSON store (`data/store.json`), empty start (no seed).
+- **Pipeline:** 7 stages — title research, strategy, script, visuals, SEO, quality, export — with job logs, progress events and stage-level invalidation. Koi demo fallback nahi: stage fail hota hai to message ke saath rukta hai.
+- **Research:** YouTube Data API v3 (real views/dates/outliers), Wikipedia REST, Gemini Google-Search grounding, deterministic title-pattern analysis, phir synthesis. Sources UI mein clickable.
+- **Stages:** Gemini/OpenAI/Anthropic adapters se strategy, script, visuals, SEO; strict JSON + validation (outline duration normalisation, beat minimums, thumbnail variants).
+- **Quality:** artifacts par deterministic checks (evidence count, runtime drift, hook length, beats, palette contrast, title length, MP4 ready).
 - **Art director:** SVG generator, per-variant layout solver (width budget + vertical fit + safe margins), palette contrast check.
 - **Media studio:** provider registry (Gemini image/TTS, OpenAI image/TTS, ElevenLabs, Pollinations, procedural art), per-scene asset store under `data/media/<project>/`, ffmpeg clip render (Ken Burns, 30 fps, H.264/AAC), concat + `.srt` + poster, streamed and downloadable MP4. Per-clip regenerate/reorder/delete endpoints back the timeline UI.
 - **Analytics engine:** per-video daily series, 100-point retention curve mapped to scene boundaries, recommendations, experiments.
@@ -213,8 +216,8 @@ Legend: ✅ shipped · ⚠️ intentionally scoped out (documented, not faked).
 
 ## 11. Agla roadmap (agar isay production SaaS banana ho)
 
-1. **YouTube OAuth + upload** — Data API v3, resumable upload, thumbnail set, playlist, scheduled publish, quota-aware retry.
-2. **Video polish** — crossfade transitions, word-level subtitle burn-in, loudness normalisation, Veo/Runway clip providers.
+1. **YouTube OAuth + upload** — resumable upload, thumbnail set, playlist, scheduled publish, quota-aware retry.
+2. **Video polish** — crossfade transitions, word-level subtitle burn-in, loudness normalisation, text-to-video providers.
 3. **Real research** — YouTube Data API search + comments mining, Google Trends, Reddit; sources ko evidence desk se link.
 4. **Persistence upgrade** — Postgres/SQLite adapter, migrations, multi-workspace.
 5. **Team review** — roles (editor/reviewer/publisher), comments on beats, audit trail.
@@ -227,4 +230,4 @@ Legend: ✅ shipped · ⚠️ intentionally scoped out (documented, not faked).
 
 Reference repo ka **product brain** top-tier hai: approval-first automation, evidence, fail-closed media, resumable jobs. Uska **engineering + design shell** rebuild karne layak tha.
 
-CreatorPilot usi philosophy ko ek premium, zero-setup, inspectable studio mein convert karta hai — real images, real narration, real MP4, clip-level timeline editor — aur jo cheez abhi implement nahi hui (YouTube upload, text-to-video, burned-in subs), usay saaf saaf *not implemented* bolta hai. Yehi asli premium hai: capability bhi, aur honesty bhi.
+CreatorPilot usi philosophy ko ek lean, inspectable tool mein convert karta hai — real research, real script, real images/voice/MP4 — aur jo cheez scope se bahar hai (YouTube upload, analytics, autopilot, text-to-video, burned-in subs) usay saaf saaf *not implemented* bolta hai. Kam features, magar har feature asli.
